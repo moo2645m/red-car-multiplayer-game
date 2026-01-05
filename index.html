@@ -46,6 +46,8 @@
 <div id="ui">
     RED SEDAN | V4.0.3<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
+    X: <span id="pos-x">0</span><br>
+    Z: <span id="pos-z">0</span><br>
     PLAYERS: <span id="peer-count">1</span>
 </div>
 
@@ -305,6 +307,8 @@
         
         document.getElementById('speed-val').innerText = Math.round(absS).toLocaleString();
         document.getElementById('peer-count').innerText = Object.keys(connections).length + 1;
+        document.getElementById('pos-x').innerText = Math.round(chassisBody.position.x).toLocaleString();
+        document.getElementById('pos-z').innerText = Math.round(chassisBody.position.z).toLocaleString();
         orbit.update(); 
         renderer.render(scene, camera);
     }
