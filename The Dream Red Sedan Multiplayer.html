@@ -5,19 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>The Dream: Red Sedan Multiplayer</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; touch-action: none; user-select: none; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
-        #joystick-knob { width: 40px; height: 40px; background: #ff0000; border-radius: 50%; position: absolute; }
+        #joystick-knob { width: 40px; height: 40px; background: #ff0000; border-radius: 50%; position: absolute; pointer-events: none; }
         #brake-btn { position: absolute; bottom: 40px; right: 40px; width: 80px; height: 80px; background: rgba(255,0,0,0.1); border: 1px solid #ff0000; border-radius: 12px; color: #ff0000; font-weight: bold; display: flex; align-items: center; justify-content: center; z-index: 10; }
         
-        /* MULTIPLAYER PANEL */
         #mp-panel { position: absolute; top: 20px; right: 20px; width: 250px; background: rgba(0,0,0,0.9); border: 1px solid #444; color: #fff; z-index: 20; border-radius: 4px; overflow: hidden; }
         #mp-header { background: #ff0000; color: #000; padding: 8px; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; }
         #mp-content { padding: 12px; display: none; flex-direction: column; gap: 10px; }
         #mp-content.open { display: flex; }
         input { background: #111; border: 1px solid #444; color: #ff0000; padding: 5px; font-family: monospace; outline: none; width: calc(100% - 12px); }
         .btn { background: #222; border: 1px solid #ff0000; color: #fff; padding: 5px; cursor: pointer; text-align: center; font-size: 11px; }
-        .btn:hover { background: #ff0000; color: #000; }
         
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; background: rgba(0,0,0,0.9); padding: 12px; border-radius: 4px; font-size: 11px; border-left: 2px solid #ff0000; pointer-events: none; z-index: 5; }
     </style>
@@ -39,16 +37,16 @@
         <label>JOIN SEED:</label>
         <input type="text" id="join-seed" placeholder="Paste seed here...">
         <div class="btn" onclick="connectToPeer()">JOIN SESSION</div>
-        <div id="conn-status" style="font-size:9px; color:#888">Status: Disconnected</div>
+        <div id="conn-status" style="font-size:9px; color:#888">Status: Offline</div>
     </div>
 </div>
 
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.0.0<br>
+    RED SEDAN | V4.0.3<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
-    NETWORK: <span id="peer-count">0</span> PLAYERS
+    PLAYERS: <span id="peer-count">1</span>
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
@@ -71,7 +69,7 @@
     import * as CANNON from 'cannon-es';
     import SimplexNoise from 'simplex-noise';
 
-    // --- VISION CORE ---
+    // --- VISION PARAMETERS ---
     const simplex = new SimplexNoise();
     const DATA_RES = 1024, GRID_SIZE = 1200, AMPLITUDE = 40, FREQ = 0.0015, WHEEL_RADIUS = 0.5; 
     const MASS = 6.8e14, MAX_SPEED_KMH = 650, MAX_SPEED_MS = MAX_SPEED_KMH / 3.6;
@@ -89,156 +87,236 @@
 
     const world = new CANNON.World();
     world.gravity.set(0, -150, 0);
-    const groundMat = new CANNON.Material("ground"), carMat = new CANNON.Material("car");
-    world.addContactMaterial(new CANNON.ContactMaterial(groundMat, carMat, { friction: 0.05, restitution: 0.0 }));
+    world.solver.iterations = 60;
 
-    // --- TERRAIN ---
+    const groundMat = new CANNON.Material("ground"), carMat = new CANNON.Material("car");
+    world.addContactMaterial(new CANNON.ContactMaterial(groundMat, carMat, {
+        friction: 0.1, restitution: 0.0, contactEquationStiffness: 1e13, contactEquationRelaxation: 5
+    }));
+
     function getHeight(x, z) { return simplex.noise2D(x * FREQ, z * FREQ) * AMPLITUDE; }
     const terrainGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, DATA_RES - 1, DATA_RES - 1);
     terrainGeo.rotateX(-Math.PI / 2);
     const terrainMesh = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({ color: 0x444444, wireframe: true }));
     scene.add(terrainMesh);
 
-    // --- ASSET LOADER ---
-    const loader = new GLTFLoader();
-    let carModel, wheelModel;
-    loader.load('https://raw.githubusercontent.com/moo2645m/car-glb/main/scene.glb', (gltf) => { carModel = gltf.scene; carModel.scale.set(3,3,3); });
-    loader.load('https://raw.githubusercontent.com/moo2645m/wheel-glb/main/Tire.glb', (gltf) => { wheelModel = gltf.scene; wheelModel.scale.set(0.4, 0.4, 0.4); });
+    let hfBody = null;
+    const elementSize = GRID_SIZE / (DATA_RES - 1);
+    function syncTerrain(cx, cz) {
+        const step = GRID_SIZE / 4; 
+        const snapX = Math.floor(cx / step) * step, snapZ = Math.floor(cz / step) * step;
+        terrainMesh.position.set(snapX, 0, snapZ);
+        const matrix = [];
+        for (let i = 0; i < DATA_RES; i++) {
+            matrix.push(new Float32Array(DATA_RES));
+            for (let j = 0; j < DATA_RES; j++) {
+                const wx = snapX - (GRID_SIZE / 2) + (i * elementSize);
+                const wz = snapZ - (GRID_SIZE / 2) + (j * elementSize);
+                matrix[i][DATA_RES - 1 - j] = getHeight(wx, wz);
+            }
+        }
+        const posAttr = terrainGeo.attributes.position;
+        for (let i = 0; i < posAttr.count; i++) {
+            posAttr.setY(i, getHeight(posAttr.getX(i) + snapX, posAttr.getZ(i) + snapZ));
+        }
+        posAttr.needsUpdate = true;
+        if (hfBody) world.removeBody(hfBody);
+        hfBody = new CANNON.Body({ mass: 0, material: groundMat });
+        hfBody.addShape(new CANNON.Heightfield(matrix, { elementSize: elementSize }));
+        hfBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+        hfBody.position.set(snapX - GRID_SIZE/2, 0, snapZ + GRID_SIZE/2);
+        world.addBody(hfBody);
+    }
 
-    // --- LOCAL CAR PHYSICS ---
     const chassisBody = new CANNON.Body({ mass: MASS, material: carMat });
     chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(1.2, 0.4, 1.15)), new CANNON.Vec3(0, 0, 1.15));
     chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(1.2, 0.4, 1.15)), new CANNON.Vec3(0, 0, -1.15));
     chassisBody.position.set(0, 20, 0);
     chassisBody.angularDamping = 0.999;
-    
+    chassisBody.linearDamping = 0.05;
+
     const vehicle = new CANNON.RaycastVehicle({ chassisBody, indexForwardAxis: 2, indexRightAxis: 0, indexUpAxis: 1 });
-    const wOpts = { radius: WHEEL_RADIUS, directionLocal: new CANNON.Vec3(0, -1, 0), suspensionStiffness: 1000, suspensionRestLength: 1.1, frictionSlip: 40.0, axleLocal: new CANNON.Vec3(-1, 0, 0) };
+    const wOpts = { radius: WHEEL_RADIUS, directionLocal: new CANNON.Vec3(0, -1, 0), suspensionStiffness: 500, suspensionRestLength: 1.1, frictionSlip: 50.0, dampingRelaxation: 20, dampingCompression: 15, axleLocal: new CANNON.Vec3(-1, 0, 0) };
     [[1.2, 0, 1.6], [-1.2, 0, 1.6], [1.2, 0, -1.725], [-1.2, 0, -1.725]].forEach(p => { wOpts.chassisConnectionPointLocal = new CANNON.Vec3(...p); vehicle.addWheel(wOpts); });
     vehicle.addToWorld(world);
 
     const localCarMesh = new THREE.Group();
     scene.add(localCarMesh);
+    const loader = new GLTFLoader();
+    let carModel;
+    const wheelMeshes = [];
 
-    // --- MULTIPLAYER LOGIC ---
+    loader.load('https://raw.githubusercontent.com/moo2645m/car-glb/main/scene.glb', (gltf) => { 
+        carModel = gltf.scene; carModel.scale.set(3,3,3); carModel.position.set(0, -0.5, 0.2);
+        localCarMesh.add(SkeletonUtils.clone(carModel));
+    });
+
+    loader.load('https://raw.githubusercontent.com/moo2645m/wheel-glb/main/Tire.glb', (gltf) => {
+        const s = WHEEL_RADIUS * 0.8;
+        for (let i = 0; i < 4; i++) {
+            const wGroup = new THREE.Group();
+            const wModel = SkeletonUtils.clone(gltf.scene);
+            wModel.scale.set(s, s, s);
+            wGroup.add(wModel);
+            scene.add(wGroup);
+            wheelMeshes[i] = wGroup;
+        }
+    });
+
+    const orbit = new OrbitControls(camera, renderer.domElement);
+    orbit.minDistance = 8; orbit.maxDistance = 20;
+
+    // --- HARDENED MULTIPLAYER LOGIC ---
     let peer, myId, connections = {}, remotePlayers = {};
     const usernameInput = document.getElementById('username-in');
 
     function initMultiplayer() {
         peer = new Peer();
-        peer.on('open', (id) => {
-            myId = id;
-            document.getElementById('my-seed').value = id;
-            document.getElementById('conn-status').innerText = "Status: Online (Waiting)";
+        peer.on('open', (id) => { 
+            myId = id; 
+            document.getElementById('my-seed').value = id; 
+            document.getElementById('conn-status').innerText = "Status: Online"; 
         });
-
-        peer.on('connection', (conn) => {
-            setupConn(conn);
-        });
+        peer.on('connection', setupConn);
     }
 
-    window.connectToPeer = function() {
-        const targetId = document.getElementById('join-seed').value;
-        if (targetId && targetId !== myId) {
-            const conn = peer.connect(targetId);
-            setupConn(conn);
-        }
+    window.connectToPeer = () => { 
+        const tid = document.getElementById('join-seed').value; 
+        if(tid && tid !== myId && !connections[tid]) setupConn(peer.connect(tid)); 
     };
 
     function setupConn(conn) {
-        conn.on('open', () => {
-            connections[conn.peer] = conn;
-            document.getElementById('conn-status').innerText = `Status: Connected to ${Object.keys(connections).length} peers`;
+        conn.on('open', () => { 
+            connections[conn.peer] = conn; 
+            document.getElementById('conn-status').innerText = `Connected: ${Object.keys(connections).length}`; 
         });
-        conn.on('data', (data) => {
-            if (data.type === 'update') updateRemotePlayer(conn.peer, data);
+        conn.on('data', (d) => { if(d.p) updateRemote(conn.peer, d); });
+        conn.on('close', () => { 
+            if(remotePlayers[conn.peer]) {
+                scene.remove(remotePlayers[conn.peer].mesh); 
+                delete remotePlayers[conn.peer];
+            }
+            delete connections[conn.peer]; 
+            document.getElementById('conn-status').innerText = `Connected: ${Object.keys(connections).length}`;
         });
-        conn.on('close', () => { delete remotePlayers[conn.peer]; delete connections[conn.peer]; });
+        conn.on('error', () => { conn.close(); });
     }
 
-    function updateRemotePlayer(id, data) {
-        if (!remotePlayers[id]) {
-            // Create new ghost car
-            const group = new THREE.Group();
-            const body = SkeletonUtils.clone(carModel);
-            body.position.set(0, -0.5, 0.2);
-            group.add(body);
-            
-            // Nametag
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            ctx.font = 'Bold 40px Courier New';
-            ctx.fillStyle = '#ff0000';
-            ctx.fillText(data.username, 10, 50);
-            const tex = new THREE.CanvasTexture(canvas);
-            const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
-            sprite.position.y = 2.5; sprite.scale.set(4, 2, 1);
-            group.add(sprite);
-
-            scene.add(group);
-            remotePlayers[id] = { mesh: group, targetPos: new THREE.Vector3(), targetQuat: new THREE.Quaternion() };
+    function updateRemote(id, d) {
+        if(!remotePlayers[id]) {
+            const g = new THREE.Group(); 
+            if(carModel) g.add(SkeletonUtils.clone(carModel));
+            scene.add(g); 
+            remotePlayers[id] = { mesh: g, tP: new THREE.Vector3(), tQ: new THREE.Quaternion() };
         }
-        remotePlayers[id].targetPos.set(data.p.x, data.p.y, data.p.z);
-        remotePlayers[id].targetQuat.set(data.q.x, data.q.y, data.q.z, data.q.w);
+        remotePlayers[id].tP.set(d.p.x, d.p.y, d.p.z); 
+        remotePlayers[id].tQ.set(d.q.x, d.q.y, d.q.z, d.q.w);
     }
 
-    // --- CONTROLS & LOOP ---
-    let drive = { throttle: 0, steer: 0, brake: false };
+    // --- INPUT HANDLING ---
+    let drive = { throttle: 0, steer: 0, brake: false }, activePtr = null;
     const joyK = document.getElementById('joystick-knob'), joyW = document.getElementById('joystick-wrapper');
-    // ... (Joystick logic from previous versions remains exactly same) ...
-    // [Manual handleJoy logic here...]
-
-    function animate() {
-        requestAnimationFrame(animate);
-        const delta = 1/60;
-        const absSpeed = Math.abs(vehicle.currentVehicleSpeedKmHour);
-
-        world.step(delta);
-        
-        // Locked Physics
-        const engineForce = (absSpeed < MAX_SPEED_KMH) ? drive.throttle * 4.1e15 : 0;
-        for(let i=0; i<4; i++) {
-            vehicle.applyEngineForce(engineForce, i);
-            vehicle.setBrake(drive.brake ? 1e12 : 0, i);
+    
+    joyW.addEventListener('pointerdown', e => { activePtr = e.pointerId; handleJoy(e); });
+    window.addEventListener('pointermove', e => { if(e.pointerId === activePtr) handleJoy(e); });
+    window.addEventListener('pointerup', e => { 
+        if(e.pointerId === activePtr) { 
+            activePtr = null; 
+            joyK.style.transform = ''; 
+            drive.throttle = 0; 
+            drive.steer = 0; 
+        } 
+    });
+    
+    function handleJoy(e) {
+        const r = joyW.getBoundingClientRect();
+        let dx = e.clientX - (r.left + r.width/2), dy = e.clientY - (r.top + r.height/2);
+        const d = Math.min(Math.sqrt(dx*dx + dy*dy), 45);
+        if (d > 0) {
+            const mag = Math.sqrt(dx*dx+dy*dy);
+            joyK.style.transform = `translate(${(dx/mag)*d}px, ${(dy/mag)*d}px)`;
+            drive.throttle = -dy/45; drive.steer = -dx/45;
         }
-        vehicle.setSteeringValue(drive.steer * 0.08, 2);
-        vehicle.setSteeringValue(drive.steer * 0.08, 3);
-
-        localCarMesh.position.copy(chassisBody.position);
-        localCarMesh.quaternion.copy(chassisBody.quaternion);
-        if(carModel && localCarMesh.children.length === 0) localCarMesh.add(SkeletonUtils.clone(carModel));
-
-        // Network Broadcast
-        if (peer && myId && Object.keys(connections).length > 0) {
-            const packet = {
-                type: 'update',
-                username: usernameInput.value.substring(0,24),
-                p: chassisBody.position,
-                q: chassisBody.quaternion
-            };
-            for (let id in connections) connections[id].send(packet);
-        }
-
-        // Ghost Interpolation (Smoothing for 50 players)
-        for (let id in remotePlayers) {
-            const p = remotePlayers[id];
-            p.mesh.position.lerp(p.targetPos, 0.1);
-            p.mesh.quaternion.slerp(p.targetQuat, 0.1);
-        }
-
-        renderer.render(scene, camera);
-        document.getElementById('speed-val').innerText = Math.round(absSpeed).toLocaleString();
-        document.getElementById('peer-count').innerText = Object.keys(connections).length;
     }
     
-    // UI Helpers
-    window.copySeed = () => {
-        const copyText = document.getElementById("my-seed");
-        copyText.select();
-        navigator.clipboard.writeText(copyText.value);
+    document.getElementById('brake-btn').onpointerdown = () => drive.brake = true;
+    window.addEventListener('pointerup', e => { if(e.pointerId !== activePtr) drive.brake = false; });
+
+    const clock = new THREE.Clock(), prevPos = new THREE.Vector3();
+    let lastUpdatePos = new THREE.Vector3(0,0,0);
+
+    // --- MAIN ENGINE LOOP ---
+    function animate() {
+        requestAnimationFrame(animate);
+        const dt = clock.getDelta(), speed = vehicle.currentVehicleSpeedKmHour, absS = Math.abs(speed);
+
+        const subSteps = 30; const tStep = 1 / (60 * subSteps); 
+        for (let i = 0; i < subSteps; i++) {
+            world.step(tStep);
+            if (chassisBody.velocity.length() > MAX_SPEED_MS) { 
+                chassisBody.velocity.normalize(); 
+                chassisBody.velocity.scale(MAX_SPEED_MS, chassisBody.velocity); 
+            }
+        }
+
+        const engineForce = (absS < MAX_SPEED_KMH) ? drive.throttle * 4.1e15 : 0;
+        for(let i=0; i<4; i++) { 
+            vehicle.applyEngineForce(engineForce, i); 
+            vehicle.setBrake(drive.brake ? 1e12 : 0, i); 
+        }
+        vehicle.setSteeringValue(drive.steer * 0.08, 2); 
+        vehicle.setSteeringValue(drive.steer * 0.08, 3);
+
+        localCarMesh.position.copy(chassisBody.position); 
+        localCarMesh.quaternion.copy(chassisBody.quaternion);
+        
+        vehicle.wheelInfos.forEach((w, i) => {
+            vehicle.updateWheelTransform(i);
+            if (wheelMeshes[i]) {
+                wheelMeshes[i].position.copy(w.worldTransform.position);
+                wheelMeshes[i].quaternion.copy(w.worldTransform.quaternion);
+                wheelMeshes[i].children[0].rotateX((speed * dt) / WHEEL_RADIUS * 0.1 * ((i >= 2) ? -1 : 1));
+            }
+        });
+
+        // Broadcast Packet
+        if (peer && myId && Object.keys(connections).length > 0) {
+            const pkt = { p: chassisBody.position, q: chassisBody.quaternion, u: usernameInput.value };
+            for (let id in connections) {
+                if(connections[id].open) connections[id].send(pkt);
+            }
+        }
+        
+        // Glide Remote Players
+        for (let id in remotePlayers) { 
+            remotePlayers[id].mesh.position.lerp(remotePlayers[id].tP, 0.1); 
+            remotePlayers[id].mesh.quaternion.slerp(remotePlayers[id].tQ, 0.1); 
+        }
+
+        if (chassisBody.position.distanceTo(lastUpdatePos) > 200) { 
+            syncTerrain(chassisBody.position.x, chassisBody.position.z); 
+            lastUpdatePos.copy(chassisBody.position); 
+        }
+        
+        camera.fov = 70 + (absS / 40); camera.updateProjectionMatrix();
+        camera.position.add(new THREE.Vector3().subVectors(chassisBody.position, prevPos));
+        orbit.target.copy(chassisBody.position); 
+        prevPos.copy(chassisBody.position);
+        
+        document.getElementById('speed-val').innerText = Math.round(absS).toLocaleString();
+        document.getElementById('peer-count').innerText = Object.keys(connections).length + 1;
+        orbit.update(); 
+        renderer.render(scene, camera);
+    }
+
+    window.copySeed = () => { 
+        const c = document.getElementById("my-seed"); 
+        c.select(); 
+        navigator.clipboard.writeText(c.value); 
     };
 
-    initMultiplayer();
+    syncTerrain(0, 0); 
+    initMultiplayer(); 
     animate();
 </script>
 </body>
