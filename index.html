@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.2.9</title>
+    <title>The Dream: Red Sedan V4.3.0</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -42,7 +42,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.2.9<br>
+    RED SEDAN | V4.3.0<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -193,19 +193,28 @@
     window.connectToPeer = () => { 
         const tid = document.getElementById('join-seed').value; 
         if(tid && tid !== myId && !connections[tid]) {
-            simplex = new SimplexNoise(parseInt(tid.substring(0, 8), 36));
-            syncTerrain(chassisBody.position.x, chassisBody.position.z);
+            // SYNC FIX: Extract exact numeric seed from the PeerID string
+            const numericSeed = parseInt(tid.substring(0, 8), 36);
+            simplex = new SimplexNoise(numericSeed);
+            
+            // Re-sync terrain immediately before packet arrival
+            syncTerrain(0, 0); 
             chassisBody.position.set(0, 20, 0);
             setupConn(peer.connect(tid)); 
+            document.getElementById('conn-status').innerText = "Status: Handshaking...";
         }
     };
 
     function setupConn(conn) {
-        conn.on('open', () => connections[conn.peer] = conn);
+        conn.on('open', () => {
+            connections[conn.peer] = conn;
+            document.getElementById('conn-status').innerText = "Status: Connected";
+        });
         conn.on('data', (d) => { if(d.p) updateRemote(conn.peer, d); });
         conn.on('close', () => { 
             if(remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
             delete connections[conn.peer]; 
+            document.getElementById('conn-status').innerText = "Status: Disconnected";
         });
     }
 
@@ -226,6 +235,7 @@
             scene.add(g); 
             remotePlayers[id] = { mesh: g, wheels: rWheels, tP: new THREE.Vector3(), tQ: new THREE.Quaternion(), tW: [] };
         }
+        // SMOOTH INTERPOLATION: Prevent "jitter" by lerping instead of snapping
         remotePlayers[id].tP.set(d.p.x, d.p.y, d.p.z); 
         remotePlayers[id].tQ.set(d.q.x, d.q.y, d.q.z, d.q.w);
         if(d.w) remotePlayers[id].tW = d.w;
@@ -286,7 +296,6 @@
             });
         }
 
-        // --- PRECISE RECOVERY & OVER-ROTATION BRAKE ---
         const carUp = new CANNON.Vec3(0, 1, 0);
         chassisBody.quaternion.vmult(carUp, carUp);
         const uprightFactor = carUp.dot(new CANNON.Vec3(0, 1, 0));
@@ -298,18 +307,14 @@
                 const rollAxis = new CANNON.Vec3();
                 carUp.cross(worldUp, rollAxis);
                 rollAxis.normalize();
-
-                // Adaptive Flip Velocity (Slower as we get closer to upright)
                 const flipSpeed = 3.5 * (1.0 - uprightFactor);
                 chassisBody.angularVelocity.x += rollAxis.x * flipSpeed;
                 chassisBody.angularVelocity.z += rollAxis.z * flipSpeed;
-                
-                if (recoveryTimer < 1.1) chassisBody.velocity.y += 10; // Only pop once
+                if (recoveryTimer < 1.1) chassisBody.velocity.y += 10;
                 document.getElementById('recovery-status').innerText = "RECOVERING...";
                 document.getElementById('recovery-status').style.color = '#00ff00';
             }
         } else if (uprightFactor > 0.85 && recoveryTimer > 0) {
-            // ROTATION BRAKE: Kill spin momentum as wheels hit ground
             chassisBody.angularVelocity.scale(0.5, chassisBody.angularVelocity);
             recoveryTimer = 0;
             document.getElementById('recovery-status').innerText = "LANDED";
@@ -349,8 +354,15 @@
         
         for (let id in remotePlayers) { 
             const p = remotePlayers[id];
-            p.mesh.position.lerp(p.tP, 0.1); p.mesh.quaternion.slerp(p.tQ, 0.1); 
-            if(p.wheels && p.tW) p.tW.forEach((wd, i) => { if(p.wheels[i]) { p.wheels[i].position.copy(wd.p); p.wheels[i].quaternion.copy(wd.q); }});
+            // LERP for smooth movement across network
+            p.mesh.position.lerp(p.tP, 0.2); 
+            p.mesh.quaternion.slerp(p.tQ, 0.2); 
+            if(p.wheels && p.tW) p.tW.forEach((wd, i) => { 
+                if(p.wheels[i]) { 
+                    p.wheels[i].position.lerp(wd.p, 0.2); 
+                    p.wheels[i].quaternion.slerp(wd.q, 0.2); 
+                }
+            });
         }
 
         if (chassisBody.position.distanceTo(lastUpdatePos) > 200) { syncTerrain(chassisBody.position.x, chassisBody.position.z); lastUpdatePos.copy(chassisBody.position); }
