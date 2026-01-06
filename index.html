@@ -3,20 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan Multiplayer</title>
+    <title>The Dream: Red Sedan V4.2.9</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
         #joystick-knob { width: 40px; height: 40px; background: #ff0000; border-radius: 50%; position: absolute; pointer-events: none; }
         #brake-btn { position: absolute; bottom: 40px; right: 40px; width: 80px; height: 80px; background: rgba(255,0,0,0.1); border: 1px solid #ff0000; border-radius: 12px; color: #ff0000; font-weight: bold; display: flex; align-items: center; justify-content: center; z-index: 10; }
-        
         #mp-panel { position: absolute; top: 20px; right: 20px; width: 250px; background: rgba(0,0,0,0.9); border: 1px solid #444; color: #fff; z-index: 20; border-radius: 4px; overflow: hidden; }
         #mp-header { background: #ff0000; color: #000; padding: 8px; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; }
         #mp-content { padding: 12px; display: none; flex-direction: column; gap: 10px; }
         #mp-content.open { display: flex; }
         input { background: #111; border: 1px solid #444; color: #ff0000; padding: 5px; font-family: monospace; outline: none; width: calc(100% - 12px); }
         .btn { background: #222; border: 1px solid #ff0000; color: #fff; padding: 5px; cursor: pointer; text-align: center; font-size: 11px; }
-        
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; background: rgba(0,0,0,0.9); padding: 12px; border-radius: 4px; font-size: 11px; border-left: 2px solid #ff0000; pointer-events: none; z-index: 5; }
     </style>
 </head>
@@ -28,7 +26,7 @@
         <span>▼</span>
     </div>
     <div id="mp-content">
-        <label>USERNAME (3-24):</label>
+        <label>USERNAME:</label>
         <input type="text" id="username-in" maxlength="24" value="Driver">
         <label>YOUR SEED (COPY):</label>
         <input type="text" id="my-seed" readonly>
@@ -44,11 +42,11 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.0.3<br>
+    RED SEDAN | V4.2.9<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
-    PLAYERS: <span id="peer-count">1</span>
+    STABILITY: <span id="recovery-status">ACTIVE</span>
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
@@ -71,10 +69,11 @@
     import * as CANNON from 'cannon-es';
     import SimplexNoise from 'simplex-noise';
 
-    // --- VISION PARAMETERS ---
-    const simplex = new SimplexNoise();
     const DATA_RES = 1024, GRID_SIZE = 1200, AMPLITUDE = 40, FREQ = 0.0015, WHEEL_RADIUS = 0.5; 
-    const MASS = 6.8e14, MAX_SPEED_KMH = 650, MAX_SPEED_MS = MAX_SPEED_KMH / 3.6;
+    const MASS = 6.8e14, MAX_SPEED_KMH = 650;
+
+    let currentWorldSeed = Math.random();
+    let simplex = new SimplexNoise(currentWorldSeed);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
@@ -89,11 +88,11 @@
 
     const world = new CANNON.World();
     world.gravity.set(0, -150, 0);
-    world.solver.iterations = 60;
+    world.solver.iterations = 100;
 
     const groundMat = new CANNON.Material("ground"), carMat = new CANNON.Material("car");
     world.addContactMaterial(new CANNON.ContactMaterial(groundMat, carMat, {
-        friction: 0.1, restitution: 0.0, contactEquationStiffness: 1e13, contactEquationRelaxation: 5
+        friction: 0.1, restitution: 0.0, contactEquationStiffness: 1e20, contactEquationRelaxation: 5
     }));
 
     function getHeight(x, z) { return simplex.noise2D(x * FREQ, z * FREQ) * AMPLITUDE; }
@@ -114,13 +113,11 @@
             for (let j = 0; j < DATA_RES; j++) {
                 const wx = snapX - (GRID_SIZE / 2) + (i * elementSize);
                 const wz = snapZ - (GRID_SIZE / 2) + (j * elementSize);
-                matrix[i][DATA_RES - 1 - j] = getHeight(wx, wz);
+                matrix[i][DATA_RES - 1 - j] = getHeight(wx, wz) + 0.1; 
             }
         }
         const posAttr = terrainGeo.attributes.position;
-        for (let i = 0; i < posAttr.count; i++) {
-            posAttr.setY(i, getHeight(posAttr.getX(i) + snapX, posAttr.getZ(i) + snapZ));
-        }
+        for (let i = 0; i < posAttr.count; i++) posAttr.setY(i, getHeight(posAttr.getX(i) + snapX, posAttr.getZ(i) + snapZ));
         posAttr.needsUpdate = true;
         if (hfBody) world.removeBody(hfBody);
         hfBody = new CANNON.Body({ mass: 0, material: groundMat });
@@ -131,10 +128,9 @@
     }
 
     const chassisBody = new CANNON.Body({ mass: MASS, material: carMat });
-    chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(1.2, 0.4, 1.15)), new CANNON.Vec3(0, 0, 1.15));
-    chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(1.2, 0.4, 1.15)), new CANNON.Vec3(0, 0, -1.15));
+    chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(1.4, 0.8, 2.8)));
     chassisBody.position.set(0, 20, 0);
-    chassisBody.angularDamping = 0.999;
+    chassisBody.angularDamping = 0.95;
     chassisBody.linearDamping = 0.05;
 
     const vehicle = new CANNON.RaycastVehicle({ chassisBody, indexForwardAxis: 2, indexRightAxis: 0, indexUpAxis: 1 });
@@ -145,7 +141,7 @@
     const localCarMesh = new THREE.Group();
     scene.add(localCarMesh);
     const loader = new GLTFLoader();
-    let carModel;
+    let carModel, wheelModel;
     const wheelMeshes = [];
 
     loader.load('https://raw.githubusercontent.com/moo2645m/car-glb/main/scene.glb', (gltf) => { 
@@ -154,10 +150,11 @@
     });
 
     loader.load('https://raw.githubusercontent.com/moo2645m/wheel-glb/main/Tire.glb', (gltf) => {
+        wheelModel = gltf.scene;
         const s = WHEEL_RADIUS * 0.8;
         for (let i = 0; i < 4; i++) {
             const wGroup = new THREE.Group();
-            const wModel = SkeletonUtils.clone(gltf.scene);
+            const wModel = SkeletonUtils.clone(wheelModel);
             wModel.scale.set(s, s, s);
             wGroup.add(wModel);
             scene.add(wGroup);
@@ -165,113 +162,177 @@
         }
     });
 
+    function createNameTag(name) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 512; canvas.height = 128;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0, 40, 512, 60);
+        ctx.font = 'bold 48px monospace';
+        ctx.fillStyle = '#ff0000';
+        ctx.textAlign = 'center';
+        ctx.fillText(name.toUpperCase(), 256, 85);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas) }));
+        sprite.scale.set(4, 1, 1);
+        sprite.position.y = 2.5;
+        return sprite;
+    }
+
     const orbit = new OrbitControls(camera, renderer.domElement);
     orbit.minDistance = 8; orbit.maxDistance = 20;
 
-    // --- HARDENED MULTIPLAYER LOGIC ---
     let peer, myId, connections = {}, remotePlayers = {};
     const usernameInput = document.getElementById('username-in');
 
     function initMultiplayer() {
         peer = new Peer();
-        peer.on('open', (id) => { 
-            myId = id; 
-            document.getElementById('my-seed').value = id; 
-            document.getElementById('conn-status').innerText = "Status: Online"; 
-        });
+        peer.on('open', (id) => { myId = id; document.getElementById('my-seed').value = id; });
         peer.on('connection', setupConn);
     }
 
     window.connectToPeer = () => { 
         const tid = document.getElementById('join-seed').value; 
-        if(tid && tid !== myId && !connections[tid]) setupConn(peer.connect(tid)); 
+        if(tid && tid !== myId && !connections[tid]) {
+            simplex = new SimplexNoise(parseInt(tid.substring(0, 8), 36));
+            syncTerrain(chassisBody.position.x, chassisBody.position.z);
+            chassisBody.position.set(0, 20, 0);
+            setupConn(peer.connect(tid)); 
+        }
     };
 
     function setupConn(conn) {
-        conn.on('open', () => { 
-            connections[conn.peer] = conn; 
-            document.getElementById('conn-status').innerText = `Connected: ${Object.keys(connections).length}`; 
-        });
+        conn.on('open', () => connections[conn.peer] = conn);
         conn.on('data', (d) => { if(d.p) updateRemote(conn.peer, d); });
         conn.on('close', () => { 
-            if(remotePlayers[conn.peer]) {
-                scene.remove(remotePlayers[conn.peer].mesh); 
-                delete remotePlayers[conn.peer];
-            }
+            if(remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
             delete connections[conn.peer]; 
-            document.getElementById('conn-status').innerText = `Connected: ${Object.keys(connections).length}`;
         });
-        conn.on('error', () => { conn.close(); });
     }
 
     function updateRemote(id, d) {
         if(!remotePlayers[id]) {
             const g = new THREE.Group(); 
             if(carModel) g.add(SkeletonUtils.clone(carModel));
+            const rWheels = [];
+            if(wheelModel) {
+                for (let i = 0; i < 4; i++) {
+                    const w = SkeletonUtils.clone(wheelModel);
+                    w.scale.set(WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8);
+                    scene.add(w);
+                    rWheels[i] = w;
+                }
+            }
+            g.add(createNameTag(d.u || "Driver"));
             scene.add(g); 
-            remotePlayers[id] = { mesh: g, tP: new THREE.Vector3(), tQ: new THREE.Quaternion() };
+            remotePlayers[id] = { mesh: g, wheels: rWheels, tP: new THREE.Vector3(), tQ: new THREE.Quaternion(), tW: [] };
         }
         remotePlayers[id].tP.set(d.p.x, d.p.y, d.p.z); 
         remotePlayers[id].tQ.set(d.q.x, d.q.y, d.q.z, d.q.w);
+        if(d.w) remotePlayers[id].tW = d.w;
     }
 
-    // --- INPUT HANDLING ---
     let drive = { throttle: 0, steer: 0, brake: false }, activePtr = null;
     const joyK = document.getElementById('joystick-knob'), joyW = document.getElementById('joystick-wrapper');
-    
-    joyW.addEventListener('pointerdown', e => { activePtr = e.pointerId; handleJoy(e); });
-    window.addEventListener('pointermove', e => { if(e.pointerId === activePtr) handleJoy(e); });
-    window.addEventListener('pointerup', e => { 
-        if(e.pointerId === activePtr) { 
-            activePtr = null; 
-            joyK.style.transform = ''; 
-            drive.throttle = 0; 
-            drive.steer = 0; 
-        } 
-    });
-    
+    joyW.onpointerdown = e => { activePtr = e.pointerId; handleJoy(e); };
+    window.onpointermove = e => { if(e.pointerId === activePtr) handleJoy(e); };
+    window.onpointerup = e => { if(e.pointerId === activePtr) { activePtr = null; joyK.style.transform = ''; drive.throttle = 0; drive.steer = 0; } };
     function handleJoy(e) {
         const r = joyW.getBoundingClientRect();
         let dx = e.clientX - (r.left + r.width/2), dy = e.clientY - (r.top + r.height/2);
         const d = Math.min(Math.sqrt(dx*dx + dy*dy), 45);
         if (d > 0) {
-            const mag = Math.sqrt(dx*dx+dy*dy);
-            joyK.style.transform = `translate(${(dx/mag)*d}px, ${(dy/mag)*d}px)`;
+            joyK.style.transform = `translate(${(dx/Math.sqrt(dx*dx+dy*dy))*d}px, ${(dy/Math.sqrt(dx*dx+dy*dy))*d}px)`;
             drive.throttle = -dy/45; drive.steer = -dx/45;
         }
     }
-    
     document.getElementById('brake-btn').onpointerdown = () => drive.brake = true;
     window.addEventListener('pointerup', e => { if(e.pointerId !== activePtr) drive.brake = false; });
 
     const clock = new THREE.Clock(), prevPos = new THREE.Vector3();
     let lastUpdatePos = new THREE.Vector3(0,0,0);
+    let recoveryTimer = 0;
 
-    // --- MAIN ENGINE LOOP ---
+    const collisionPoints = [];
+    for (let z = -2.8; z <= 2.8; z += 1.4) { 
+        for (let x = -1.4; x <= 1.4; x += 1.4) { 
+            for (let y = -0.8; y <= 0.8; y += 0.4) { 
+                collisionPoints.push(new CANNON.Vec3(x, y, z));
+            }
+        }
+    }
+
     function animate() {
         requestAnimationFrame(animate);
         const dt = clock.getDelta(), speed = vehicle.currentVehicleSpeedKmHour, absS = Math.abs(speed);
 
-        const subSteps = 30; const tStep = 1 / (60 * subSteps); 
+        const subSteps = 30; 
+        const tStep = 1 / (60 * subSteps); 
         for (let i = 0; i < subSteps; i++) {
             world.step(tStep);
-            if (chassisBody.velocity.length() > MAX_SPEED_MS) { 
-                chassisBody.velocity.normalize(); 
-                chassisBody.velocity.scale(MAX_SPEED_MS, chassisBody.velocity); 
+            
+            collisionPoints.forEach(lp => {
+                const wp = new CANNON.Vec3();
+                chassisBody.quaternion.vmult(lp, wp);
+                wp.vadd(chassisBody.position, wp);
+
+                const floorY = getHeight(wp.x, wp.z);
+                if (wp.y < floorY) {
+                    const penetration = floorY - wp.y;
+                    let forceScale = (recoveryTimer > 0.5) ? 800 : 240;
+                    const forceMag = penetration * MASS * forceScale; 
+                    const worldImpulsePoint = wp.vsub(chassisBody.position);
+                    chassisBody.applyImpulse(new CANNON.Vec3(0, forceMag * tStep, 0), worldImpulsePoint);
+                }
+            });
+        }
+
+        // --- PRECISE RECOVERY & OVER-ROTATION BRAKE ---
+        const carUp = new CANNON.Vec3(0, 1, 0);
+        chassisBody.quaternion.vmult(carUp, carUp);
+        const uprightFactor = carUp.dot(new CANNON.Vec3(0, 1, 0));
+
+        if (uprightFactor < 0.6) { 
+            recoveryTimer += dt;
+            if (recoveryTimer > 1.0) { 
+                const worldUp = new CANNON.Vec3(0, 1, 0);
+                const rollAxis = new CANNON.Vec3();
+                carUp.cross(worldUp, rollAxis);
+                rollAxis.normalize();
+
+                // Adaptive Flip Velocity (Slower as we get closer to upright)
+                const flipSpeed = 3.5 * (1.0 - uprightFactor);
+                chassisBody.angularVelocity.x += rollAxis.x * flipSpeed;
+                chassisBody.angularVelocity.z += rollAxis.z * flipSpeed;
+                
+                if (recoveryTimer < 1.1) chassisBody.velocity.y += 10; // Only pop once
+                document.getElementById('recovery-status').innerText = "RECOVERING...";
+                document.getElementById('recovery-status').style.color = '#00ff00';
             }
+        } else if (uprightFactor > 0.85 && recoveryTimer > 0) {
+            // ROTATION BRAKE: Kill spin momentum as wheels hit ground
+            chassisBody.angularVelocity.scale(0.5, chassisBody.angularVelocity);
+            recoveryTimer = 0;
+            document.getElementById('recovery-status').innerText = "LANDED";
+            document.getElementById('recovery-status').style.color = '#fff';
+        } else {
+            recoveryTimer = 0;
+            document.getElementById('recovery-status').innerText = "STABLE";
+            document.getElementById('recovery-status').style.color = '#555';
         }
 
         const engineForce = (absS < MAX_SPEED_KMH) ? drive.throttle * 4.1e15 : 0;
-        for(let i=0; i<4; i++) { 
-            vehicle.applyEngineForce(engineForce, i); 
-            vehicle.setBrake(drive.brake ? 1e12 : 0, i); 
-        }
-        vehicle.setSteeringValue(drive.steer * 0.08, 2); 
-        vehicle.setSteeringValue(drive.steer * 0.08, 3);
+        const bForce = drive.brake ? 1e18 : 0;
+        chassisBody.linearDamping = drive.brake ? 0.95 : 0.05;
+
+        for(let i=0; i<4; i++) { vehicle.applyEngineForce(engineForce, i); vehicle.setBrake(bForce, i); }
+        vehicle.setSteeringValue(drive.steer * 0.08, 2); vehicle.setSteeringValue(drive.steer * 0.08, 3);
 
         localCarMesh.position.copy(chassisBody.position); 
         localCarMesh.quaternion.copy(chassisBody.quaternion);
-        
+        document.getElementById('speed-val').innerText = Math.round(absS).toLocaleString();
+        document.getElementById('pos-x').innerText = Math.round(chassisBody.position.x).toLocaleString();
+        document.getElementById('pos-z').innerText = Math.round(chassisBody.position.z).toLocaleString();
+
         vehicle.wheelInfos.forEach((w, i) => {
             vehicle.updateWheelTransform(i);
             if (wheelMeshes[i]) {
@@ -281,47 +342,26 @@
             }
         });
 
-        // Broadcast Packet
         if (peer && myId && Object.keys(connections).length > 0) {
-            const pkt = { p: chassisBody.position, q: chassisBody.quaternion, u: usernameInput.value };
-            for (let id in connections) {
-                if(connections[id].open) connections[id].send(pkt);
-            }
+            const pkt = { p: chassisBody.position, q: chassisBody.quaternion, w: vehicle.wheelInfos.map(wi => ({ p: wi.worldTransform.position, q: wi.worldTransform.quaternion })), u: usernameInput.value };
+            for (let id in connections) if(connections[id].open) connections[id].send(pkt);
         }
         
-        // Glide Remote Players
         for (let id in remotePlayers) { 
-            remotePlayers[id].mesh.position.lerp(remotePlayers[id].tP, 0.1); 
-            remotePlayers[id].mesh.quaternion.slerp(remotePlayers[id].tQ, 0.1); 
+            const p = remotePlayers[id];
+            p.mesh.position.lerp(p.tP, 0.1); p.mesh.quaternion.slerp(p.tQ, 0.1); 
+            if(p.wheels && p.tW) p.tW.forEach((wd, i) => { if(p.wheels[i]) { p.wheels[i].position.copy(wd.p); p.wheels[i].quaternion.copy(wd.q); }});
         }
 
-        if (chassisBody.position.distanceTo(lastUpdatePos) > 200) { 
-            syncTerrain(chassisBody.position.x, chassisBody.position.z); 
-            lastUpdatePos.copy(chassisBody.position); 
-        }
-        
+        if (chassisBody.position.distanceTo(lastUpdatePos) > 200) { syncTerrain(chassisBody.position.x, chassisBody.position.z); lastUpdatePos.copy(chassisBody.position); }
         camera.fov = 70 + (absS / 40); camera.updateProjectionMatrix();
         camera.position.add(new THREE.Vector3().subVectors(chassisBody.position, prevPos));
-        orbit.target.copy(chassisBody.position); 
-        prevPos.copy(chassisBody.position);
-        
-        document.getElementById('speed-val').innerText = Math.round(absS).toLocaleString();
-        document.getElementById('peer-count').innerText = Object.keys(connections).length + 1;
-        document.getElementById('pos-x').innerText = Math.round(chassisBody.position.x).toLocaleString();
-        document.getElementById('pos-z').innerText = Math.round(chassisBody.position.z).toLocaleString();
-        orbit.update(); 
-        renderer.render(scene, camera);
+        orbit.target.copy(chassisBody.position); prevPos.copy(chassisBody.position);
+        orbit.update(); renderer.render(scene, camera);
     }
 
-    window.copySeed = () => { 
-        const c = document.getElementById("my-seed"); 
-        c.select(); 
-        navigator.clipboard.writeText(c.value); 
-    };
-
-    syncTerrain(0, 0); 
-    initMultiplayer(); 
-    animate();
+    window.copySeed = () => { const c = document.getElementById("my-seed"); c.select(); navigator.clipboard.writeText(c.value); };
+    syncTerrain(0, 0); initMultiplayer(); animate();
 </script>
 </body>
 </html>
