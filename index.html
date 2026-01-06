@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.3.2</title>
+    <title>Red Sedan V4.3.5</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -27,15 +27,12 @@
     </div>
     <div id="mp-content">
         <label>USERNAME:</label>
-        <input type="text" id="username-in" maxlength="24" value="Driver">
-        <label>CURRENT WORLD SEED:</label>
-        <input type="text" id="my-seed">
-        <div class="btn" onclick="applySeed()">FORCE NEW SEED</div>
+        <input type="text" id="username-in" maxlength="24">
         <hr style="border:0; border-top:1px solid #333; width:100%">
         <label>JOIN PEER ID:</label>
         <input type="text" id="join-seed" placeholder="Paste Peer ID here...">
         <div class="btn" onclick="connectToPeer()">JOIN SESSION</div>
-        <div id="conn-status" style="font-size:9px; color:#888">Status: Offline</div>
+        <div id="conn-status" style="font-size:9px; color:#ff0000">Status: Waiting for PeerJS...</div>
         <div id="peer-id-display" style="font-size:9px; color:#ff0000; margin-top:5px; word-break:break-all; cursor:pointer" onclick="copyMyId()">MY ID (TAP TO COPY): Generating...</div>
     </div>
 </div>
@@ -43,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.3.2<br>
+    RED SEDAN | V4.3.5<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -73,9 +70,13 @@
     const DATA_RES = 1024, GRID_SIZE = 1200, AMPLITUDE = 40, FREQ = 0.0015, WHEEL_RADIUS = 0.5; 
     const MASS = 6.8e14, MAX_SPEED_KMH = 650;
 
-    // AUTO-GENERATE SEED ON START
+    // RANDOM USERNAME INIT - Removed space
+    const randomSuffix = Math.floor(Math.random() * 99999) + 1;
+    const defaultUsername = "Driver" + randomSuffix.toString().padStart(5, '0');
+    document.getElementById('username-in').value = defaultUsername;
+
+    // Automatic hidden seed generation
     let currentWorldSeed = Math.floor(1000 + Math.random() * 9000);
-    document.getElementById('my-seed').value = currentWorldSeed;
     let simplex = new SimplexNoise(currentWorldSeed);
 
     const scene = new THREE.Scene();
@@ -129,18 +130,6 @@
         hfBody.position.set(snapX - GRID_SIZE/2, 0, snapZ + GRID_SIZE/2);
         world.addBody(hfBody);
     }
-
-    window.applySeed = () => {
-        const val = document.getElementById('my-seed').value;
-        if(val) {
-            currentWorldSeed = parseInt(val);
-            simplex = new SimplexNoise(currentWorldSeed);
-            syncTerrain(chassisBody.position.x, chassisBody.position.z);
-            document.getElementById('conn-status').innerText = "World Seed Set: " + currentWorldSeed;
-            // Notify connections if any
-            for (let id in connections) if(connections[id].open) connections[id].send({ type: 'SYNC_SEED', seed: currentWorldSeed });
-        }
-    };
 
     const chassisBody = new CANNON.Body({ mass: MASS, material: carMat });
     chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(1.4, 0.8, 2.8)));
@@ -200,26 +189,31 @@
     const usernameInput = document.getElementById('username-in');
 
     function initMultiplayer() {
-        peer = new Peer();
+        peer = new Peer({ debug: 1 });
         peer.on('open', (id) => { 
             myId = id; 
             document.getElementById('peer-id-display').innerText = "MY ID (TAP TO COPY): " + id; 
+            document.getElementById('conn-status').innerText = "Status: Online (Ready)";
+            document.getElementById('conn-status').style.color = "#00ff00";
         });
         peer.on('connection', setupConn);
+        peer.on('error', (err) => { document.getElementById('conn-status').innerText = "Error: " + err.type; });
     }
 
     window.copyMyId = () => {
         if(myId) {
             navigator.clipboard.writeText(myId);
+            const oldText = document.getElementById('conn-status').innerText;
             document.getElementById('conn-status').innerText = "ID Copied!";
+            setTimeout(() => document.getElementById('conn-status').innerText = oldText, 2000);
         }
     };
 
     window.connectToPeer = () => { 
-        const tid = document.getElementById('join-seed').value; 
+        const tid = document.getElementById('join-seed').value.trim(); 
         if(tid && tid !== myId && !connections[tid]) {
-            setupConn(peer.connect(tid)); 
-            document.getElementById('conn-status').innerText = "Status: Handshaking...";
+            setupConn(peer.connect(tid, { reliable: true })); 
+            document.getElementById('conn-status').innerText = "Status: Connecting...";
         }
     };
 
@@ -227,13 +221,12 @@
         conn.on('open', () => {
             connections[conn.peer] = conn;
             document.getElementById('conn-status').innerText = "Status: Connected";
-            // Host pushes its current seed to the joiner immediately
+            document.getElementById('conn-status').style.color = "#00ff00";
             conn.send({ type: 'SYNC_SEED', seed: currentWorldSeed });
         });
         conn.on('data', (d) => { 
             if(d.type === 'SYNC_SEED') {
                 currentWorldSeed = d.seed;
-                document.getElementById('my-seed').value = currentWorldSeed;
                 simplex = new SimplexNoise(currentWorldSeed);
                 syncTerrain(chassisBody.position.x, chassisBody.position.z);
             }
@@ -242,7 +235,8 @@
         conn.on('close', () => { 
             if(remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
             delete connections[conn.peer]; 
-            document.getElementById('conn-status').innerText = "Status: Disconnected";
+            document.getElementById('conn-status').innerText = "Status: Peer Left";
+            document.getElementById('conn-status').style.color = "#ff0000";
         });
     }
 
