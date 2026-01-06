@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Red Sedan V4.3.5</title>
+    <title>The Dream: Red Sedan V4.3.9</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -32,7 +32,7 @@
         <label>JOIN PEER ID:</label>
         <input type="text" id="join-seed" placeholder="Paste Peer ID here...">
         <div class="btn" onclick="connectToPeer()">JOIN SESSION</div>
-        <div id="conn-status" style="font-size:9px; color:#ff0000">Status: Waiting for PeerJS...</div>
+        <div id="conn-status" style="font-size:9px; color:#ff0000">Status: Offline</div>
         <div id="peer-id-display" style="font-size:9px; color:#ff0000; margin-top:5px; word-break:break-all; cursor:pointer" onclick="copyMyId()">MY ID (TAP TO COPY): Generating...</div>
     </div>
 </div>
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.3.5<br>
+    RED SEDAN | V4.3.9<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -70,12 +70,9 @@
     const DATA_RES = 1024, GRID_SIZE = 1200, AMPLITUDE = 40, FREQ = 0.0015, WHEEL_RADIUS = 0.5; 
     const MASS = 6.8e14, MAX_SPEED_KMH = 650;
 
-    // RANDOM USERNAME INIT - Removed space
     const randomSuffix = Math.floor(Math.random() * 99999) + 1;
-    const defaultUsername = "Driver" + randomSuffix.toString().padStart(5, '0');
-    document.getElementById('username-in').value = defaultUsername;
+    document.getElementById('username-in').value = "Driver" + randomSuffix.toString().padStart(5, '0');
 
-    // Automatic hidden seed generation
     let currentWorldSeed = Math.floor(1000 + Math.random() * 9000);
     let simplex = new SimplexNoise(currentWorldSeed);
 
@@ -84,7 +81,14 @@
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 15000);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
     document.body.appendChild(renderer.domElement);
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
 
     const sun = new THREE.DirectionalLight(0xffffff, 2.5);
     sun.position.set(50, 100, 50);
@@ -129,6 +133,16 @@
         hfBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
         hfBody.position.set(snapX - GRID_SIZE/2, 0, snapZ + GRID_SIZE/2);
         world.addBody(hfBody);
+    }
+
+    function performResetAndSync(newSeed) {
+        chassisBody.velocity.set(0, 0, 0);
+        chassisBody.angularVelocity.set(0, 0, 0);
+        chassisBody.position.set(0, 20, 0);
+        chassisBody.quaternion.set(0, 0, 0, 1);
+        currentWorldSeed = newSeed;
+        simplex = new SimplexNoise(currentWorldSeed);
+        syncTerrain(0, 0);
     }
 
     const chassisBody = new CANNON.Body({ mass: MASS, material: carMat });
@@ -193,7 +207,7 @@
         peer.on('open', (id) => { 
             myId = id; 
             document.getElementById('peer-id-display').innerText = "MY ID (TAP TO COPY): " + id; 
-            document.getElementById('conn-status').innerText = "Status: Online (Ready)";
+            document.getElementById('conn-status').innerText = "Status: Online";
             document.getElementById('conn-status').style.color = "#00ff00";
         });
         peer.on('connection', setupConn);
@@ -222,20 +236,17 @@
             connections[conn.peer] = conn;
             document.getElementById('conn-status').innerText = "Status: Connected";
             document.getElementById('conn-status').style.color = "#00ff00";
+            // Host only sends the seed; only the peer triggers the local reset
             conn.send({ type: 'SYNC_SEED', seed: currentWorldSeed });
         });
         conn.on('data', (d) => { 
-            if(d.type === 'SYNC_SEED') {
-                currentWorldSeed = d.seed;
-                simplex = new SimplexNoise(currentWorldSeed);
-                syncTerrain(chassisBody.position.x, chassisBody.position.z);
-            }
+            if(d.type === 'SYNC_SEED') performResetAndSync(d.seed);
             if(d.p) updateRemote(conn.peer, d); 
         });
         conn.on('close', () => { 
             if(remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
             delete connections[conn.peer]; 
-            document.getElementById('conn-status').innerText = "Status: Peer Left";
+            document.getElementById('conn-status').innerText = "Status: Disconnected";
             document.getElementById('conn-status').style.color = "#ff0000";
         });
     }
@@ -295,6 +306,8 @@
     function animate() {
         requestAnimationFrame(animate);
         const dt = clock.getDelta(), speed = vehicle.currentVehicleSpeedKmHour, absS = Math.abs(speed);
+
+        if (chassisBody.position.y < -100) { performResetAndSync(currentWorldSeed); }
 
         const subSteps = 30; 
         const tStep = 1 / (60 * subSteps); 
