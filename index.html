@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.4.0</title>
+    <title>The Dream: Red Sedan V4.4.1</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.4.0<br>
+    RED SEDAN | V4.4.1<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -75,6 +75,7 @@
 
     let currentWorldSeed = Math.floor(1000 + Math.random() * 9000);
     let simplex = new SimplexNoise(currentWorldSeed);
+    let isHost = true; // Default to true, changes if we connect to someone
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
@@ -136,10 +137,13 @@
     }
 
     function performResetAndSync(newSeed) {
+        // Reset physics state
         chassisBody.velocity.set(0, 0, 0);
         chassisBody.angularVelocity.set(0, 0, 0);
         chassisBody.position.set(0, 20, 0);
         chassisBody.quaternion.set(0, 0, 0, 1);
+        
+        // Update seed and world
         currentWorldSeed = newSeed;
         simplex = new SimplexNoise(currentWorldSeed);
         syncTerrain(0, 0);
@@ -210,7 +214,10 @@
             document.getElementById('conn-status').innerText = "Status: Online";
             document.getElementById('conn-status').style.color = "#00ff00";
         });
-        peer.on('connection', setupConn);
+        peer.on('connection', (conn) => {
+            // This is the Host receiving a connection
+            setupConn(conn, false); 
+        });
         peer.on('error', (err) => { document.getElementById('conn-status').innerText = "Error: " + err.type; });
     }
 
@@ -226,30 +233,37 @@
     window.connectToPeer = () => { 
         const tid = document.getElementById('join-seed').value.trim(); 
         if(tid && tid !== myId && !connections[tid]) {
-            setupConn(peer.connect(tid, { reliable: true })); 
+            isHost = false; // We are now a Peer
+            const conn = peer.connect(tid, { reliable: true });
+            setupConn(conn, true); 
             document.getElementById('conn-status').innerText = "Status: Connecting...";
         }
     };
 
-    function setupConn(conn) {
+    function setupConn(conn, amIPeer) {
         conn.on('open', () => {
             connections[conn.peer] = conn;
             document.getElementById('conn-status').innerText = "Status: Connected";
             document.getElementById('conn-status').style.color = "#00ff00";
-            // Peer sends "Ready" to trigger host sending the seed
-            conn.send({ type: 'HANDSHAKE_READY' });
+            
+            if(amIPeer) {
+                // Peer asks for seed immediately upon opening
+                conn.send({ type: 'REQ_SEED' });
+            }
         });
+
         conn.on('data', (d) => { 
-            if(d.type === 'HANDSHAKE_READY') {
-                // Host receives Peer's ready signal, sends current seed
+            if(d.type === 'REQ_SEED' && !amIPeer) {
+                // Host sends the seed to the requester
                 conn.send({ type: 'SYNC_SEED', seed: currentWorldSeed });
             }
-            if(d.type === 'SYNC_SEED') {
-                // Peer receives seed, performs local reset
+            if(d.type === 'SYNC_SEED' && amIPeer) {
+                // Peer receives seed and teleports
                 performResetAndSync(d.seed);
             }
             if(d.p) updateRemote(conn.peer, d); 
         });
+
         conn.on('close', () => { 
             if(remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
             delete connections[conn.peer]; 
@@ -314,6 +328,7 @@
         requestAnimationFrame(animate);
         const dt = clock.getDelta(), speed = vehicle.currentVehicleSpeedKmHour, absS = Math.abs(speed);
 
+        // Void Reset for local player
         if (chassisBody.position.y < -100) { performResetAndSync(currentWorldSeed); }
 
         const subSteps = 30; 
