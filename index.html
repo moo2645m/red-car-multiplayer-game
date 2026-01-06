@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.3.9</title>
+    <title>The Dream: Red Sedan V4.4.0</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.3.9<br>
+    RED SEDAN | V4.4.0<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -236,11 +236,18 @@
             connections[conn.peer] = conn;
             document.getElementById('conn-status').innerText = "Status: Connected";
             document.getElementById('conn-status').style.color = "#00ff00";
-            // Host only sends the seed; only the peer triggers the local reset
-            conn.send({ type: 'SYNC_SEED', seed: currentWorldSeed });
+            // Peer sends "Ready" to trigger host sending the seed
+            conn.send({ type: 'HANDSHAKE_READY' });
         });
         conn.on('data', (d) => { 
-            if(d.type === 'SYNC_SEED') performResetAndSync(d.seed);
+            if(d.type === 'HANDSHAKE_READY') {
+                // Host receives Peer's ready signal, sends current seed
+                conn.send({ type: 'SYNC_SEED', seed: currentWorldSeed });
+            }
+            if(d.type === 'SYNC_SEED') {
+                // Peer receives seed, performs local reset
+                performResetAndSync(d.seed);
+            }
             if(d.p) updateRemote(conn.peer, d); 
         });
         conn.on('close', () => { 
