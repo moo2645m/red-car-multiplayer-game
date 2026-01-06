@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.3.1</title>
+    <title>The Dream: Red Sedan V4.3.2</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -14,7 +14,7 @@
         #mp-content { padding: 12px; display: none; flex-direction: column; gap: 10px; }
         #mp-content.open { display: flex; }
         input { background: #111; border: 1px solid #444; color: #ff0000; padding: 5px; font-family: monospace; outline: none; width: calc(100% - 12px); }
-        .btn { background: #222; border: 1px solid #ff0000; color: #fff; padding: 5px; cursor: pointer; text-align: center; font-size: 11px; margin-top: 5px; }
+        .btn { background: #222; border: 1px solid #ff0000; color: #fff; padding: 5px; cursor: pointer; text-align: center; font-size: 11px; }
         #ui { position: absolute; top: 20px; left: 20px; color: #fff; background: rgba(0,0,0,0.9); padding: 12px; border-radius: 4px; font-size: 11px; border-left: 2px solid #ff0000; pointer-events: none; z-index: 5; }
     </style>
 </head>
@@ -28,22 +28,22 @@
     <div id="mp-content">
         <label>USERNAME:</label>
         <input type="text" id="username-in" maxlength="24" value="Driver">
-        <label>YOUR SEED (COPY):</label>
-        <input type="text" id="my-seed" readonly>
-        <div class="btn" onclick="copySeed()">COPY MY SEED</div>
+        <label>CURRENT WORLD SEED:</label>
+        <input type="text" id="my-seed">
+        <div class="btn" onclick="applySeed()">FORCE NEW SEED</div>
         <hr style="border:0; border-top:1px solid #333; width:100%">
-        <label>JOIN SEED:</label>
-        <input type="text" id="join-seed" placeholder="Paste seed here...">
+        <label>JOIN PEER ID:</label>
+        <input type="text" id="join-seed" placeholder="Paste Peer ID here...">
         <div class="btn" onclick="connectToPeer()">JOIN SESSION</div>
-        <div class="btn" style="border-color: #00ff00; color: #00ff00;" onclick="teleportToRemote()">TP TO PLAYER</div>
         <div id="conn-status" style="font-size:9px; color:#888">Status: Offline</div>
+        <div id="peer-id-display" style="font-size:9px; color:#ff0000; margin-top:5px; word-break:break-all; cursor:pointer" onclick="copyMyId()">MY ID (TAP TO COPY): Generating...</div>
     </div>
 </div>
 
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.3.1<br>
+    RED SEDAN | V4.3.2<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -73,7 +73,9 @@
     const DATA_RES = 1024, GRID_SIZE = 1200, AMPLITUDE = 40, FREQ = 0.0015, WHEEL_RADIUS = 0.5; 
     const MASS = 6.8e14, MAX_SPEED_KMH = 650;
 
-    let currentWorldSeed = Math.random();
+    // AUTO-GENERATE SEED ON START
+    let currentWorldSeed = Math.floor(1000 + Math.random() * 9000);
+    document.getElementById('my-seed').value = currentWorldSeed;
     let simplex = new SimplexNoise(currentWorldSeed);
 
     const scene = new THREE.Scene();
@@ -127,6 +129,18 @@
         hfBody.position.set(snapX - GRID_SIZE/2, 0, snapZ + GRID_SIZE/2);
         world.addBody(hfBody);
     }
+
+    window.applySeed = () => {
+        const val = document.getElementById('my-seed').value;
+        if(val) {
+            currentWorldSeed = parseInt(val);
+            simplex = new SimplexNoise(currentWorldSeed);
+            syncTerrain(chassisBody.position.x, chassisBody.position.z);
+            document.getElementById('conn-status').innerText = "World Seed Set: " + currentWorldSeed;
+            // Notify connections if any
+            for (let id in connections) if(connections[id].open) connections[id].send({ type: 'SYNC_SEED', seed: currentWorldSeed });
+        }
+    };
 
     const chassisBody = new CANNON.Body({ mass: MASS, material: carMat });
     chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(1.4, 0.8, 2.8)));
@@ -187,50 +201,55 @@
 
     function initMultiplayer() {
         peer = new Peer();
-        peer.on('open', (id) => { myId = id; document.getElementById('my-seed').value = id; });
+        peer.on('open', (id) => { 
+            myId = id; 
+            document.getElementById('peer-id-display').innerText = "MY ID (TAP TO COPY): " + id; 
+        });
         peer.on('connection', setupConn);
     }
+
+    window.copyMyId = () => {
+        if(myId) {
+            navigator.clipboard.writeText(myId);
+            document.getElementById('conn-status').innerText = "ID Copied!";
+        }
+    };
 
     window.connectToPeer = () => { 
         const tid = document.getElementById('join-seed').value; 
         if(tid && tid !== myId && !connections[tid]) {
-            // FIX: Extract numeric seed from PeerID to ensure terrain parity
-            const seedNum = parseInt(tid.substring(0, 8), 36);
-            simplex = new SimplexNoise(seedNum);
-            syncTerrain(0, 0); 
-            chassisBody.position.set(0, 20, 0);
             setupConn(peer.connect(tid)); 
-        }
-    };
-
-    window.teleportToRemote = () => {
-        const ids = Object.keys(remotePlayers);
-        if (ids.length > 0) {
-            const target = remotePlayers[ids[0]].tP;
-            chassisBody.position.set(target.x, target.y + 5, target.z);
-            chassisBody.velocity.set(0, 0, 0);
-            chassisBody.angularVelocity.set(0, 0, 0);
-            syncTerrain(target.x, target.z);
+            document.getElementById('conn-status').innerText = "Status: Handshaking...";
         }
     };
 
     function setupConn(conn) {
-        conn.on('open', () => connections[conn.peer] = conn);
-        conn.on('data', (d) => { if(d.p) updateRemote(conn.peer, d); });
+        conn.on('open', () => {
+            connections[conn.peer] = conn;
+            document.getElementById('conn-status').innerText = "Status: Connected";
+            // Host pushes its current seed to the joiner immediately
+            conn.send({ type: 'SYNC_SEED', seed: currentWorldSeed });
+        });
+        conn.on('data', (d) => { 
+            if(d.type === 'SYNC_SEED') {
+                currentWorldSeed = d.seed;
+                document.getElementById('my-seed').value = currentWorldSeed;
+                simplex = new SimplexNoise(currentWorldSeed);
+                syncTerrain(chassisBody.position.x, chassisBody.position.z);
+            }
+            if(d.p) updateRemote(conn.peer, d); 
+        });
         conn.on('close', () => { 
             if(remotePlayers[conn.peer]) { scene.remove(remotePlayers[conn.peer].mesh); delete remotePlayers[conn.peer]; }
             delete connections[conn.peer]; 
+            document.getElementById('conn-status').innerText = "Status: Disconnected";
         });
     }
 
     function updateRemote(id, d) {
         if(!remotePlayers[id]) {
             const g = new THREE.Group(); 
-            if(carModel) {
-                const m = SkeletonUtils.clone(carModel);
-                m.scale.set(3,3,3); // Ensure ghost is same size as local
-                g.add(m);
-            }
+            if(carModel) g.add(SkeletonUtils.clone(carModel));
             const rWheels = [];
             if(wheelModel) {
                 for (let i = 0; i < 4; i++) {
@@ -309,21 +328,26 @@
         if (uprightFactor < 0.6) { 
             recoveryTimer += dt;
             if (recoveryTimer > 1.0) { 
-                const worldUp = new CANNON.Vec3(0, 1, 0), rollAxis = new CANNON.Vec3();
-                carUp.cross(worldUp, rollAxis); rollAxis.normalize();
+                const worldUp = new CANNON.Vec3(0, 1, 0);
+                const rollAxis = new CANNON.Vec3();
+                carUp.cross(worldUp, rollAxis);
+                rollAxis.normalize();
                 const flipSpeed = 3.5 * (1.0 - uprightFactor);
                 chassisBody.angularVelocity.x += rollAxis.x * flipSpeed;
                 chassisBody.angularVelocity.z += rollAxis.z * flipSpeed;
                 if (recoveryTimer < 1.1) chassisBody.velocity.y += 10;
                 document.getElementById('recovery-status').innerText = "RECOVERING...";
+                document.getElementById('recovery-status').style.color = '#00ff00';
             }
         } else if (uprightFactor > 0.85 && recoveryTimer > 0) {
             chassisBody.angularVelocity.scale(0.5, chassisBody.angularVelocity);
             recoveryTimer = 0;
             document.getElementById('recovery-status').innerText = "LANDED";
+            document.getElementById('recovery-status').style.color = '#fff';
         } else {
             recoveryTimer = 0;
             document.getElementById('recovery-status').innerText = "STABLE";
+            document.getElementById('recovery-status').style.color = '#555';
         }
 
         const engineForce = (absS < MAX_SPEED_KMH) ? drive.throttle * 4.1e15 : 0;
@@ -355,8 +379,14 @@
         
         for (let id in remotePlayers) { 
             const p = remotePlayers[id];
-            p.mesh.position.lerp(p.tP, 0.2); p.mesh.quaternion.slerp(p.tQ, 0.2); 
-            if(p.wheels && p.tW) p.tW.forEach((wd, i) => { if(p.wheels[i]) { p.wheels[i].position.copy(wd.p); p.wheels[i].quaternion.copy(wd.q); }});
+            p.mesh.position.lerp(p.tP, 0.2); 
+            p.mesh.quaternion.slerp(p.tQ, 0.2); 
+            if(p.wheels && p.tW) p.tW.forEach((wd, i) => { 
+                if(p.wheels[i]) { 
+                    p.wheels[i].position.lerp(wd.p, 0.2); 
+                    p.wheels[i].quaternion.slerp(wd.q, 0.2); 
+                }
+            });
         }
 
         if (chassisBody.position.distanceTo(lastUpdatePos) > 200) { syncTerrain(chassisBody.position.x, chassisBody.position.z); lastUpdatePos.copy(chassisBody.position); }
@@ -366,7 +396,6 @@
         orbit.update(); renderer.render(scene, camera);
     }
 
-    window.copySeed = () => { const c = document.getElementById("my-seed"); c.select(); navigator.clipboard.writeText(c.value); };
     syncTerrain(0, 0); initMultiplayer(); animate();
 </script>
 </body>
