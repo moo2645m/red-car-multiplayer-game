@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Red Sedan V4.5.3</title>
+    <title>Red Sedan V4.5.4</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.5.3<br>
+    RED SEDAN | V4.5.4<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -141,40 +141,35 @@
     [[1.2, 0, 1.6], [-1.2, 0, 1.6], [1.2, 0, -1.725], [-1.2, 0, -1.725]].forEach(p => { wOpts.chassisConnectionPointLocal = new CANNON.Vec3(...p); vehicle.addWheel(wOpts); });
     vehicle.addToWorld(world);
 
+    // Collision Points for Terrain Detection
+    const collisionPoints = [];
+    for (let z = -2.8; z <= 2.8; z += 1.4) for (let x = -1.4; x <= 1.4; x += 1.4) for (let y = -0.8; y <= 0.8; y += 0.4) collisionPoints.push(new CANNON.Vec3(x, y, z));
+
     const localCarMesh = new THREE.Group();
     scene.add(localCarMesh);
     
-    // Instanced Rendering Assets
     let chassisList, wheelList;
     const MAX_GHOSTS = 100;
     const instMatrix = new THREE.Matrix4();
     const invisibleMatrix = new THREE.Matrix4().set(0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0);
-    
-    // Low-CPU Reuse Objects (Prevent Garbage Collection spikes)
-    const _v3 = new THREE.Vector3();
-    const _q = new THREE.Quaternion();
-    const _sCar = new THREE.Vector3(3, 3, 3);
-    const _sWheel = new THREE.Vector3(0.4, 0.4, 0.4);
+    const _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _sCar = new THREE.Vector3(3, 3, 3), _sWheel = new THREE.Vector3(0.4, 0.4, 0.4);
 
     const loader = new GLTFLoader();
     const wheelMeshes = [];
 
     loader.load('https://raw.githubusercontent.com/moo2645m/car-glb/main/scene.glb', (gltf) => {
-        let extMesh;
-        gltf.scene.traverse(c => { if(c.isMesh && !extMesh) extMesh = c; });
+        let extMesh; gltf.scene.traverse(c => { if(c.isMesh && !extMesh) extMesh = c; });
         if(extMesh) {
             chassisList = new THREE.InstancedMesh(extMesh.geometry, extMesh.material, MAX_GHOSTS);
             for(let i=0; i<MAX_GHOSTS; i++) chassisList.setMatrixAt(i, invisibleMatrix);
             scene.add(chassisList);
         }
-        Assets.car = gltf.scene; 
-        Assets.car.scale.set(3,3,3); Assets.car.position.set(0, -0.5, 0.2);
+        Assets.car = gltf.scene; Assets.car.scale.set(3,3,3); Assets.car.position.set(0, -0.5, 0.2);
         localCarMesh.add(SkeletonUtils.clone(Assets.car));
     });
 
     loader.load('https://raw.githubusercontent.com/moo2645m/wheel-glb/main/Tire.glb', (gltf) => {
-        let extMesh;
-        gltf.scene.traverse(c => { if(c.isMesh && !extMesh) extMesh = c; });
+        let extMesh; gltf.scene.traverse(c => { if(c.isMesh && !extMesh) extMesh = c; });
         if(extMesh) {
             wheelList = new THREE.InstancedMesh(extMesh.geometry, extMesh.material, MAX_GHOSTS * 4);
             for(let i=0; i<MAX_GHOSTS*4; i++) wheelList.setMatrixAt(i, invisibleMatrix);
@@ -222,8 +217,7 @@
             }
             delete connections[conn.peer];
         };
-        conn.on('close', cleanup);
-        conn.on('error', cleanup);
+        conn.on('close', cleanup); conn.on('error', cleanup);
     }
 
     function updateRemote(id, d) {
@@ -234,8 +228,7 @@
         }
         const rp = remotePlayers[id];
         rp.lastSeen = Date.now();
-        rp.tP.set(d.p.x, d.p.y, d.p.z); 
-        rp.tQ.set(d.q.x, d.q.y, d.q.z, d.q.w);
+        rp.tP.set(d.p.x, d.p.y, d.p.z); rp.tQ.set(d.q.x, d.q.y, d.q.z, d.q.w);
         if(d.w) rp.tW = d.w;
     }
 
@@ -260,7 +253,7 @@
     window.addEventListener('pointerup', e => { if(e.pointerId !== activePtr) drive.brake = false; });
 
     const clock = new THREE.Clock(), prevPos = new THREE.Vector3();
-    let lastUpdatePos = new THREE.Vector3(0,0,0);
+    let lastUpdatePos = new THREE.Vector3(0,0,0), recoveryTimer = 0;
 
     function animate() {
         requestAnimationFrame(animate);
@@ -268,7 +261,37 @@
         const now = Date.now();
 
         const subSteps = 30, tStep = 1 / (60 * subSteps); 
-        for (let i = 0; i < subSteps; i++) world.step(tStep);
+        for (let i = 0; i < subSteps; i++) {
+            world.step(tStep);
+            // Restore Collision Matrix logic
+            collisionPoints.forEach(lp => {
+                const wp = new CANNON.Vec3();
+                chassisBody.quaternion.vmult(lp, wp);
+                wp.vadd(chassisBody.position, wp);
+                const floorY = getHeight(wp.x, wp.z);
+                if (wp.y < floorY) {
+                    const penetration = floorY - wp.y;
+                    chassisBody.applyImpulse(new CANNON.Vec3(0, (penetration * MASS * (recoveryTimer > 0.5 ? 800 : 240)) * tStep, 0), wp.vsub(chassisBody.position));
+                }
+            });
+        }
+
+        // Restore Stability / Recovery Logic
+        const carUp = new CANNON.Vec3(0, 1, 0);
+        chassisBody.quaternion.vmult(carUp, carUp);
+        const uprightFactor = carUp.dot(new CANNON.Vec3(0, 1, 0));
+        if (uprightFactor < 0.6) { 
+            recoveryTimer += dt;
+            if (recoveryTimer > 1.0) { 
+                const rollAxis = new CANNON.Vec3();
+                carUp.cross(new CANNON.Vec3(0, 1, 0), rollAxis);
+                rollAxis.normalize();
+                chassisBody.angularVelocity.x += rollAxis.x * 3.5;
+                chassisBody.angularVelocity.z += rollAxis.z * 3.5;
+                if (recoveryTimer < 1.1) chassisBody.velocity.y += 10;
+                document.getElementById('recovery-status').innerText = "RECOVERING...";
+            }
+        } else { recoveryTimer = 0; document.getElementById('recovery-status').innerText = "STABLE"; }
 
         const eForce = (absS < MAX_SPEED_KMH && !drive.brake) ? drive.throttle * 4.1e15 : 0;
         const bForce = drive.brake ? 1e20 : 0;
@@ -292,25 +315,19 @@
             for (let id in connections) if(connections[id].open) connections[id].send(pkt);
         }
         
-        // High-Speed Ghost Sync (Low CPU Latency)
         if (chassisList && wheelList) {
             for (let id in remotePlayers) {
                 const p = remotePlayers[id];
                 if (now - p.lastSeen > 5000) {
                     chassisList.setMatrixAt(p.idx, invisibleMatrix);
                     for(let j=0; j<4; j++) wheelList.setMatrixAt(p.idx*4+j, invisibleMatrix);
-                    delete remotePlayers[id];
-                    continue;
+                    delete remotePlayers[id]; continue;
                 }
-                
-                // Optimized Matrix compose using reusable objects
                 instMatrix.compose(p.tP, p.tQ, _sCar);
                 chassisList.setMatrixAt(p.idx, instMatrix);
-                
                 if(p.tW.length === 4) {
                     p.tW.forEach((wd, j) => {
-                        _v3.set(wd.p.x, wd.p.y, wd.p.z);
-                        _q.set(wd.q.x, wd.q.y, wd.q.z, wd.q.w);
+                        _v3.set(wd.p.x, wd.p.y, wd.p.z); _q.set(wd.q.x, wd.q.y, wd.q.z, wd.q.w);
                         instMatrix.compose(_v3, _q, _sWheel);
                         wheelList.setMatrixAt(p.idx * 4 + j, instMatrix);
                     });
