@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.4.4</title>
+    <title>The Dream: Red Sedan V4.4.5</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.4.4<br>
+    RED SEDAN | V4.4.5<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -236,6 +236,14 @@
         }
     };
 
+    function disposeRemotePlayer(id) {
+        if (remotePlayers[id]) {
+            scene.remove(remotePlayers[id].mesh);
+            remotePlayers[id].wheels.forEach(w => scene.remove(w));
+            delete remotePlayers[id];
+        }
+    }
+
     function setupConn(conn, peerRole) {
         conn.on('open', () => {
             connections[conn.peer] = conn;
@@ -249,14 +257,11 @@
             if(d.p) updateRemote(conn.peer, d); 
         });
         conn.on('close', () => { 
-            if(remotePlayers[conn.peer]) { 
-                scene.remove(remotePlayers[conn.peer].mesh); 
-                remotePlayers[conn.peer].wheels.forEach(w => scene.remove(w));
-                delete remotePlayers[conn.peer]; 
-            }
+            disposeRemotePlayer(conn.peer);
             delete connections[conn.peer]; 
             document.getElementById('conn-status').innerText = "Status: Disconnected";
         });
+        conn.on('error', () => { disposeRemotePlayer(conn.peer); delete connections[conn.peer]; });
     }
 
     function updateRemote(id, d) {
@@ -270,7 +275,8 @@
         }
         
         const rp = remotePlayers[id];
-        // Handle Wheel Spawning if not yet ready
+        
+        // Late Spawning Wheels
         if(rp.wheels.length === 0 && wheelModel) {
             for (let i = 0; i < 4; i++) {
                 const w = SkeletonUtils.clone(wheelModel);
