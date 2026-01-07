@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.4.5</title>
+    <title>The Dream: Red Sedan V4.4.6</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.4.5<br>
+    RED SEDAN | V4.4.6<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -185,7 +185,7 @@
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         canvas.width = 512; canvas.height = 128;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
         ctx.fillRect(0, 40, 512, 60);
         ctx.font = 'bold 48px monospace';
         ctx.fillStyle = '#ff0000';
@@ -209,30 +209,20 @@
         peer = new Peer({ debug: 1 });
         peer.on('open', (id) => { 
             myId = id; 
-            document.getElementById('peer-id-display').innerText = "MY ID (TAP TO COPY): " + id; 
+            document.getElementById('peer-id-display').innerText = "MY ID: " + id; 
             document.getElementById('conn-status').innerText = "Status: Online";
             document.getElementById('conn-status').style.color = "#00ff00";
         });
         peer.on('connection', (conn) => setupConn(conn, false));
-        peer.on('error', (err) => { document.getElementById('conn-status').innerText = "Error: " + err.type; });
     }
 
-    window.copyMyId = () => {
-        if(myId) {
-            navigator.clipboard.writeText(myId);
-            const oldText = document.getElementById('conn-status').innerText;
-            document.getElementById('conn-status').innerText = "ID Copied!";
-            setTimeout(() => document.getElementById('conn-status').innerText = oldText, 2000);
-        }
-    };
+    window.copyMyId = () => { if(myId) navigator.clipboard.writeText(myId); };
 
     window.connectToPeer = () => { 
         const tid = document.getElementById('join-seed').value.trim(); 
         if(tid && tid !== myId && !connections[tid]) {
             amIPeer = true;
-            const conn = peer.connect(tid, { reliable: true });
-            setupConn(conn, true); 
-            document.getElementById('conn-status').innerText = "Status: Connecting...";
+            setupConn(peer.connect(tid, { reliable: true }), true); 
         }
     };
 
@@ -247,8 +237,6 @@
     function setupConn(conn, peerRole) {
         conn.on('open', () => {
             connections[conn.peer] = conn;
-            document.getElementById('conn-status').innerText = "Status: Connected";
-            document.getElementById('conn-status').style.color = "#00ff00";
             if(peerRole) conn.send({ type: 'REQ_SEED' });
         });
         conn.on('data', (d) => { 
@@ -256,11 +244,7 @@
             if(d.type === 'SYNC_SEED' && peerRole) performResetAndSync(d.seed);
             if(d.p) updateRemote(conn.peer, d); 
         });
-        conn.on('close', () => { 
-            disposeRemotePlayer(conn.peer);
-            delete connections[conn.peer]; 
-            document.getElementById('conn-status').innerText = "Status: Disconnected";
-        });
+        conn.on('close', () => { disposeRemotePlayer(conn.peer); delete connections[conn.peer]; });
         conn.on('error', () => { disposeRemotePlayer(conn.peer); delete connections[conn.peer]; });
     }
 
@@ -273,26 +257,12 @@
             scene.add(g); 
             remotePlayers[id] = { mesh: g, wheels: [], nameTag: tag, tP: new THREE.Vector3(), tQ: new THREE.Quaternion(), tW: [] };
         }
-        
         const rp = remotePlayers[id];
-        
-        // Late Spawning Wheels
-        if(rp.wheels.length === 0 && wheelModel) {
-            for (let i = 0; i < 4; i++) {
-                const w = SkeletonUtils.clone(wheelModel);
-                w.scale.set(WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8);
-                scene.add(w);
-                rp.wheels[i] = w;
-            }
-        }
-        
-        // Dynamic Name Update
         if(d.u && rp.nameTag.userData.name !== d.u) {
             rp.mesh.remove(rp.nameTag);
             rp.nameTag = createNameTag(d.u);
             rp.mesh.add(rp.nameTag);
         }
-
         rp.tP.set(d.p.x, d.p.y, d.p.z); 
         rp.tQ.set(d.q.x, d.q.y, d.q.z, d.q.w);
         if(d.w) rp.tW = d.w;
@@ -320,13 +290,7 @@
     let recoveryTimer = 0;
 
     const collisionPoints = [];
-    for (let z = -2.8; z <= 2.8; z += 1.4) { 
-        for (let x = -1.4; x <= 1.4; x += 1.4) { 
-            for (let y = -0.8; y <= 0.8; y += 0.4) { 
-                collisionPoints.push(new CANNON.Vec3(x, y, z));
-            }
-        }
-    }
+    for (let z = -2.8; z <= 2.8; z += 1.4) for (let x = -1.4; x <= 1.4; x += 1.4) for (let y = -0.8; y <= 0.8; y += 0.4) collisionPoints.push(new CANNON.Vec3(x, y, z));
 
     function animate() {
         requestAnimationFrame(animate);
@@ -334,8 +298,7 @@
 
         if (chassisBody.position.y < -100) performResetAndSync(currentWorldSeed);
 
-        const subSteps = 30; 
-        const tStep = 1 / (60 * subSteps); 
+        const subSteps = 30, tStep = 1 / (60 * subSteps); 
         for (let i = 0; i < subSteps; i++) {
             world.step(tStep);
             collisionPoints.forEach(lp => {
@@ -345,9 +308,7 @@
                 const floorY = getHeight(wp.x, wp.z);
                 if (wp.y < floorY) {
                     const penetration = floorY - wp.y;
-                    let forceScale = (recoveryTimer > 0.5) ? 800 : 240;
-                    const forceMag = penetration * MASS * forceScale; 
-                    chassisBody.applyImpulse(new CANNON.Vec3(0, forceMag * tStep, 0), wp.vsub(chassisBody.position));
+                    chassisBody.applyImpulse(new CANNON.Vec3(0, (penetration * MASS * (recoveryTimer > 0.5 ? 800 : 240)) * tStep, 0), wp.vsub(chassisBody.position));
                 }
             });
         }
@@ -355,7 +316,6 @@
         const carUp = new CANNON.Vec3(0, 1, 0);
         chassisBody.quaternion.vmult(carUp, carUp);
         const uprightFactor = carUp.dot(new CANNON.Vec3(0, 1, 0));
-
         if (uprightFactor < 0.6) { 
             recoveryTimer += dt;
             if (recoveryTimer > 1.0) { 
@@ -367,16 +327,12 @@
                 if (recoveryTimer < 1.1) chassisBody.velocity.y += 10;
                 document.getElementById('recovery-status').innerText = "RECOVERING...";
             }
-        } else {
-            recoveryTimer = 0;
-            document.getElementById('recovery-status').innerText = "STABLE";
-        }
+        } else { recoveryTimer = 0; document.getElementById('recovery-status').innerText = "STABLE"; }
 
-        const engineForce = (absS < MAX_SPEED_KMH) ? drive.throttle * 4.1e15 : 0;
-        const bForce = drive.brake ? 1e18 : 0;
         chassisBody.linearDamping = drive.brake ? 0.999 : 0.05;
-
-        for(let i=0; i<4; i++) { vehicle.applyEngineForce(engineForce, i); vehicle.setBrake(bForce, i); }
+        const eForce = (absS < MAX_SPEED_KMH) ? drive.throttle * 4.1e15 : 0;
+        const bForce = drive.brake ? 1e18 : 0;
+        for(let i=0; i<4; i++) { vehicle.applyEngineForce(eForce, i); vehicle.setBrake(bForce, i); }
         vehicle.setSteeringValue(drive.steer * 0.08, 2); vehicle.setSteeringValue(drive.steer * 0.08, 3);
 
         localCarMesh.position.copy(chassisBody.position); 
@@ -403,6 +359,14 @@
             const p = remotePlayers[id];
             p.mesh.position.lerp(p.tP, 0.2); 
             p.mesh.quaternion.slerp(p.tQ, 0.2); 
+            if(p.wheels.length === 0 && wheelModel) {
+                for (let i = 0; i < 4; i++) {
+                    const w = SkeletonUtils.clone(wheelModel);
+                    w.scale.set(WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8);
+                    scene.add(w);
+                    p.wheels[i] = w;
+                }
+            }
             if(p.wheels.length > 0 && p.tW) p.tW.forEach((wd, i) => { 
                 if(p.wheels[i]) { p.wheels[i].position.lerp(wd.p, 0.2); p.wheels[i].quaternion.slerp(wd.q, 0.2); }
             });
