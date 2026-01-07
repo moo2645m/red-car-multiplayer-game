@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>The Dream: Red Sedan V4.4.6</title>
+    <title>The Dream: Red Sedan V4.4.8</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -33,14 +33,14 @@
         <input type="text" id="join-seed" placeholder="Paste Peer ID here...">
         <div class="btn" onclick="connectToPeer()">JOIN SESSION</div>
         <div id="conn-status" style="font-size:9px; color:#ff0000">Status: Offline</div>
-        <div id="peer-id-display" style="font-size:9px; color:#ff0000; margin-top:5px; word-break:break-all; cursor:pointer" onclick="copyMyId()">MY ID (TAP TO COPY): Generating...</div>
+        <div id="peer-id-display" style="font-size:9px; color:#ff0000; margin-top:5px; word-break:break-all; cursor:pointer" onclick="copyMyId()">MY ID: Generating...</div>
     </div>
 </div>
 
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.4.6<br>
+    RED SEDAN | V4.4.8<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -69,6 +69,9 @@
 
     const DATA_RES = 1024, GRID_SIZE = 1200, AMPLITUDE = 40, FREQ = 0.0015, WHEEL_RADIUS = 0.5; 
     const MASS = 6.8e14, MAX_SPEED_KMH = 650;
+    
+    // Global Asset Registry
+    const Assets = { car: null, wheel: null };
 
     const randomSuffix = Math.floor(Math.random() * 99999) + 1;
     document.getElementById('username-in').value = "Driver" + randomSuffix.toString().padStart(5, '0');
@@ -160,20 +163,19 @@
     const localCarMesh = new THREE.Group();
     scene.add(localCarMesh);
     const loader = new GLTFLoader();
-    let carModel, wheelModel;
     const wheelMeshes = [];
 
     loader.load('https://raw.githubusercontent.com/moo2645m/car-glb/main/scene.glb', (gltf) => { 
-        carModel = gltf.scene; carModel.scale.set(3,3,3); carModel.position.set(0, -0.5, 0.2);
-        localCarMesh.add(SkeletonUtils.clone(carModel));
+        Assets.car = gltf.scene; Assets.car.scale.set(3,3,3); Assets.car.position.set(0, -0.5, 0.2);
+        localCarMesh.add(SkeletonUtils.clone(Assets.car));
     });
 
     loader.load('https://raw.githubusercontent.com/moo2645m/wheel-glb/main/Tire.glb', (gltf) => {
-        wheelModel = gltf.scene;
+        Assets.wheel = gltf.scene;
         const s = WHEEL_RADIUS * 0.8;
         for (let i = 0; i < 4; i++) {
             const wGroup = new THREE.Group();
-            const wModel = SkeletonUtils.clone(wheelModel);
+            const wModel = SkeletonUtils.clone(Assets.wheel);
             wModel.scale.set(s, s, s);
             wGroup.add(wModel);
             scene.add(wGroup);
@@ -185,16 +187,16 @@
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         canvas.width = 512; canvas.height = 128;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fillRect(0, 40, 512, 60);
-        ctx.font = 'bold 48px monospace';
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 30, 512, 80);
+        ctx.font = 'bold 54px monospace';
         ctx.fillStyle = '#ff0000';
         ctx.textAlign = 'center';
         ctx.fillText(name.toUpperCase(), 256, 85);
         const tex = new THREE.CanvasTexture(canvas);
         const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
         sprite.scale.set(4, 1, 1);
-        sprite.position.y = 2.5;
+        sprite.position.y = 3.0;
         sprite.userData.name = name;
         return sprite;
     }
@@ -217,7 +219,6 @@
     }
 
     window.copyMyId = () => { if(myId) navigator.clipboard.writeText(myId); };
-
     window.connectToPeer = () => { 
         const tid = document.getElementById('join-seed').value.trim(); 
         if(tid && tid !== myId && !connections[tid]) {
@@ -225,14 +226,6 @@
             setupConn(peer.connect(tid, { reliable: true }), true); 
         }
     };
-
-    function disposeRemotePlayer(id) {
-        if (remotePlayers[id]) {
-            scene.remove(remotePlayers[id].mesh);
-            remotePlayers[id].wheels.forEach(w => scene.remove(w));
-            delete remotePlayers[id];
-        }
-    }
 
     function setupConn(conn, peerRole) {
         conn.on('open', () => {
@@ -244,25 +237,46 @@
             if(d.type === 'SYNC_SEED' && peerRole) performResetAndSync(d.seed);
             if(d.p) updateRemote(conn.peer, d); 
         });
-        conn.on('close', () => { disposeRemotePlayer(conn.peer); delete connections[conn.peer]; });
-        conn.on('error', () => { disposeRemotePlayer(conn.peer); delete connections[conn.peer]; });
+        const cleanup = () => {
+            if (remotePlayers[conn.peer]) {
+                scene.remove(remotePlayers[conn.peer].group);
+                remotePlayers[conn.peer].wheels.forEach(w => scene.remove(w));
+                delete remotePlayers[conn.peer];
+            }
+            delete connections[conn.peer];
+        };
+        conn.on('close', cleanup);
+        conn.on('error', cleanup);
     }
 
     function updateRemote(id, d) {
         if(!remotePlayers[id]) {
-            const g = new THREE.Group(); 
-            if(carModel) g.add(SkeletonUtils.clone(carModel));
+            const group = new THREE.Group();
+            if(Assets.car) group.add(SkeletonUtils.clone(Assets.car));
             const tag = createNameTag(d.u || "Driver");
-            g.add(tag);
-            scene.add(g); 
-            remotePlayers[id] = { mesh: g, wheels: [], nameTag: tag, tP: new THREE.Vector3(), tQ: new THREE.Quaternion(), tW: [] };
+            group.add(tag);
+            scene.add(group);
+            remotePlayers[id] = { group, wheels: [], nameTag: tag, tP: new THREE.Vector3(), tQ: new THREE.Quaternion(), tW: [] };
         }
+        
         const rp = remotePlayers[id];
-        if(d.u && rp.nameTag.userData.name !== d.u) {
-            rp.mesh.remove(rp.nameTag);
-            rp.nameTag = createNameTag(d.u);
-            rp.mesh.add(rp.nameTag);
+
+        // Force wheel fetch check every update until wheels are present
+        if(rp.wheels.length === 0 && Assets.wheel) {
+            for(let i=0; i<4; i++) {
+                const w = SkeletonUtils.clone(Assets.wheel);
+                w.scale.set(WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8);
+                scene.add(w);
+                rp.wheels.push(w);
+            }
         }
+
+        if(d.u && rp.nameTag.userData.name !== d.u) {
+            rp.group.remove(rp.nameTag);
+            rp.nameTag = createNameTag(d.u);
+            rp.group.add(rp.nameTag);
+        }
+
         rp.tP.set(d.p.x, d.p.y, d.p.z); 
         rp.tQ.set(d.q.x, d.q.y, d.q.z, d.q.w);
         if(d.w) rp.tW = d.w;
@@ -357,19 +371,16 @@
         
         for (let id in remotePlayers) { 
             const p = remotePlayers[id];
-            p.mesh.position.lerp(p.tP, 0.2); 
-            p.mesh.quaternion.slerp(p.tQ, 0.2); 
-            if(p.wheels.length === 0 && wheelModel) {
-                for (let i = 0; i < 4; i++) {
-                    const w = SkeletonUtils.clone(wheelModel);
-                    w.scale.set(WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8);
-                    scene.add(w);
-                    p.wheels[i] = w;
-                }
+            p.group.position.lerp(p.tP, 0.2); 
+            p.group.quaternion.slerp(p.tQ, 0.2); 
+            if(p.wheels.length > 0 && p.tW) {
+                p.tW.forEach((wd, i) => { 
+                    if(p.wheels[i]) {
+                        p.wheels[i].position.lerp(new THREE.Vector3(wd.p.x, wd.p.y, wd.p.z), 0.2);
+                        p.wheels[i].quaternion.slerp(new THREE.Quaternion(wd.q.x, wd.q.y, wd.q.z, wd.q.w), 0.2);
+                    }
+                });
             }
-            if(p.wheels.length > 0 && p.tW) p.tW.forEach((wd, i) => { 
-                if(p.wheels[i]) { p.wheels[i].position.lerp(wd.p, 0.2); p.wheels[i].quaternion.slerp(wd.q, 0.2); }
-            });
         }
 
         if (chassisBody.position.distanceTo(lastUpdatePos) > 200) { syncTerrain(chassisBody.position.x, chassisBody.position.z); lastUpdatePos.copy(chassisBody.position); }
