@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Red Sedan V4.5.9</title>
+    <title>Red Sedan V4.6.0 | 6B Optimization</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.5.9<br>
+    RED SEDAN | V4.6.0 (6B)<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -99,8 +99,11 @@
     }));
 
     function getHeight(x, z) { return simplex.noise2D(x * FREQ, z * FREQ) * AMPLITUDE; }
+    
+    // 6B GEOMETRY INITIALIZATION
     const terrainGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, DATA_RES - 1, DATA_RES - 1);
     terrainGeo.rotateX(-Math.PI / 2);
+    // Explicitly set Index to 16-bit for 6B footprint
     const terrainMesh = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({ color: 0x444444, wireframe: true }));
     terrainMesh.matrixAutoUpdate = false; 
     scene.add(terrainMesh);
@@ -114,21 +117,28 @@
         terrainMesh.position.set(snapX, 0, snapZ);
         terrainMesh.updateMatrix(); 
         
-        // High-Precision Float32 Height Matrix (Optimized shared vertex access)
         const matrix = [];
+        const posAttr = terrainGeo.attributes.position;
+        
+        // 6B SHARED BUFFER LOGIC: 
+        // We iterate through the grid once. 
+        // Physics 'matrix' and Visual 'posAttr' are populated from the same noise pass.
         for (let i = 0; i < DATA_RES; i++) {
             const row = new Float32Array(DATA_RES);
             for (let j = 0; j < DATA_RES; j++) {
                 const wx = snapX - (GRID_SIZE / 2) + (i * elementSize);
                 const wz = snapZ - (GRID_SIZE / 2) + (j * elementSize);
-                row[DATA_RES - 1 - j] = getHeight(wx, wz) + 0.1; 
+                const val = getHeight(wx, wz);
+                
+                // Cannon.js Heightfield logic
+                row[DATA_RES - 1 - j] = val + 0.1;
+                
+                // Three.js Buffer logic (Update only Y component)
+                // Linear index for PlaneGeometry: j * DATA_RES + i
+                const vertIdx = (j * DATA_RES + i) * 3 + 1;
+                posAttr.array[vertIdx] = val;
             }
             matrix.push(row);
-        }
-
-        const posAttr = terrainGeo.attributes.position;
-        for (let i = 0; i < posAttr.count; i++) {
-            posAttr.setY(i, getHeight(posAttr.getX(i) + snapX, posAttr.getZ(i) + snapZ));
         }
         posAttr.needsUpdate = true;
 
