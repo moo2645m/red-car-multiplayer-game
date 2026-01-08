@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Red Sedan V4.5.4</title>
+    <title>Red Sedan V4.5.9</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: monospace; touch-action: none; user-select: none; }
         #joystick-wrapper { position: absolute; bottom: 40px; left: 40px; width: 100px; height: 100px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; }
@@ -30,7 +30,7 @@
         <input type="text" id="username-in" maxlength="24">
         <hr style="border:0; border-top:1px solid #333; width:100%">
         <label>JOIN PEER ID:</label>
-        <input type="text" id="join-seed" placeholder="Paste Peer ID here...">
+        <input type="number" id="join-seed" placeholder="Enter 10-digit ID...">
         <div class="btn" onclick="connectToPeer()">JOIN SESSION</div>
         <div id="conn-status" style="font-size:9px; color:#ff0000">Status: Offline</div>
         <div id="peer-id-display" style="font-size:9px; color:#ff0000; margin-top:5px; word-break:break-all; cursor:pointer" onclick="copyMyId()">MY ID: Generating...</div>
@@ -40,7 +40,7 @@
 <div id="joystick-wrapper"><div id="joystick-knob"></div></div>
 <div id="brake-btn">BRAKE</div>
 <div id="ui">
-    RED SEDAN | V4.5.4<br>
+    RED SEDAN | V4.5.9<br>
     SPEED: <span id="speed-val">0</span> KM/H<br>
     X: <span id="pos-x">0</span><br>
     Z: <span id="pos-z">0</span><br>
@@ -80,7 +80,7 @@
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 15000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
     document.body.appendChild(renderer.domElement);
@@ -91,7 +91,7 @@
 
     const world = new CANNON.World();
     world.gravity.set(0, -150, 0);
-    world.solver.iterations = 100;
+    world.solver.iterations = 20; 
 
     const groundMat = new CANNON.Material("ground"), carMat = new CANNON.Material("car");
     world.addContactMaterial(new CANNON.ContactMaterial(groundMat, carMat, {
@@ -102,26 +102,36 @@
     const terrainGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, DATA_RES - 1, DATA_RES - 1);
     terrainGeo.rotateX(-Math.PI / 2);
     const terrainMesh = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({ color: 0x444444, wireframe: true }));
+    terrainMesh.matrixAutoUpdate = false; 
     scene.add(terrainMesh);
 
     let hfBody = null;
     const elementSize = GRID_SIZE / (DATA_RES - 1);
+    
     function syncTerrain(cx, cz) {
         const step = GRID_SIZE / 4; 
         const snapX = Math.floor(cx / step) * step, snapZ = Math.floor(cz / step) * step;
         terrainMesh.position.set(snapX, 0, snapZ);
+        terrainMesh.updateMatrix(); 
+        
+        // High-Precision Float32 Height Matrix (Optimized shared vertex access)
         const matrix = [];
         for (let i = 0; i < DATA_RES; i++) {
-            matrix.push(new Float32Array(DATA_RES));
+            const row = new Float32Array(DATA_RES);
             for (let j = 0; j < DATA_RES; j++) {
                 const wx = snapX - (GRID_SIZE / 2) + (i * elementSize);
                 const wz = snapZ - (GRID_SIZE / 2) + (j * elementSize);
-                matrix[i][DATA_RES - 1 - j] = getHeight(wx, wz) + 0.1; 
+                row[DATA_RES - 1 - j] = getHeight(wx, wz) + 0.1; 
             }
+            matrix.push(row);
         }
+
         const posAttr = terrainGeo.attributes.position;
-        for (let i = 0; i < posAttr.count; i++) posAttr.setY(i, getHeight(posAttr.getX(i) + snapX, posAttr.getZ(i) + snapZ));
+        for (let i = 0; i < posAttr.count; i++) {
+            posAttr.setY(i, getHeight(posAttr.getX(i) + snapX, posAttr.getZ(i) + snapZ));
+        }
         posAttr.needsUpdate = true;
+
         if (hfBody) world.removeBody(hfBody);
         hfBody = new CANNON.Body({ mass: 0, material: groundMat });
         hfBody.addShape(new CANNON.Heightfield(matrix, { elementSize: elementSize }));
@@ -141,11 +151,11 @@
     [[1.2, 0, 1.6], [-1.2, 0, 1.6], [1.2, 0, -1.725], [-1.2, 0, -1.725]].forEach(p => { wOpts.chassisConnectionPointLocal = new CANNON.Vec3(...p); vehicle.addWheel(wOpts); });
     vehicle.addToWorld(world);
 
-    // Collision Points for Terrain Detection
     const collisionPoints = [];
     for (let z = -2.8; z <= 2.8; z += 1.4) for (let x = -1.4; x <= 1.4; x += 1.4) for (let y = -0.8; y <= 0.8; y += 0.4) collisionPoints.push(new CANNON.Vec3(x, y, z));
 
     const localCarMesh = new THREE.Group();
+    localCarMesh.matrixAutoUpdate = false; 
     scene.add(localCarMesh);
     
     let chassisList, wheelList;
@@ -181,6 +191,7 @@
             const wModel = SkeletonUtils.clone(Assets.wheel);
             wModel.scale.set(WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8, WHEEL_RADIUS*0.8);
             wGroup.add(wModel);
+            wGroup.matrixAutoUpdate = false; 
             scene.add(wGroup);
             wheelMeshes[i] = wGroup;
         }
@@ -189,13 +200,31 @@
     const orbit = new OrbitControls(camera, renderer.domElement);
     orbit.minDistance = 8; orbit.maxDistance = 20;
 
+    // MULTIPLAYER LOGIC
     let peer, myId, connections = {}, remotePlayers = {};
     const usernameInput = document.getElementById('username-in');
 
     function initMultiplayer() {
-        peer = new Peer({ debug: 1 });
-        peer.on('open', (id) => { myId = id; document.getElementById('peer-id-display').innerText = "MY ID: " + id; });
+        const tenDigitId = Math.floor(1e9 + Math.random() * 9e9).toString();
+        peer = new Peer(tenDigitId, { 
+            debug: 1,
+            config: { 'iceServers': [{ url: 'stun:stun.l.google.com:19302' }] }
+        });
+        
+        peer.on('open', (id) => { 
+            myId = id; 
+            document.getElementById('peer-id-display').innerText = "MY ID: " + id; 
+            document.getElementById('peer-id-display').style.color = "#00ff00";
+            document.getElementById('conn-status').innerText = "Status: Online";
+            document.getElementById('conn-status').style.color = "#00ff00";
+        });
+        
         peer.on('connection', (conn) => setupConn(conn, false));
+        
+        peer.on('error', (err) => {
+            document.getElementById('conn-status').innerText = "Status: Offline (" + err.type + ")";
+            document.getElementById('conn-status').style.color = "#ff0000";
+        });
     }
 
     function setupConn(conn, isJoiner) {
@@ -205,7 +234,14 @@
         });
         conn.on('data', (d) => { 
             if(d.type === 'REQ_SEED') conn.send({ type: 'SYNC_SEED', seed: currentWorldSeed });
-            if(d.type === 'SYNC_SEED') { currentWorldSeed = d.seed; simplex = new SimplexNoise(d.seed); syncTerrain(0,0); }
+            if(d.type === 'SYNC_SEED') { 
+                currentWorldSeed = d.seed; 
+                simplex = new SimplexNoise(d.seed); 
+                chassisBody.position.set(0, 20, 0);
+                chassisBody.velocity.set(0, 0, 0);
+                chassisBody.angularVelocity.set(0, 0, 0);
+                syncTerrain(0, 0); 
+            }
             if(d.p) updateRemote(conn.peer, d); 
         });
         const cleanup = () => {
@@ -237,46 +273,54 @@
 
     let drive = { throttle: 0, steer: 0, brake: false }, activePtr = null;
     const joyK = document.getElementById('joystick-knob'), joyW = document.getElementById('joystick-wrapper');
+    const MAX_JOY_DIST = 30; 
+
     joyW.onpointerdown = e => { activePtr = e.pointerId; handleJoy(e); };
-    window.onpointermove = e => { if(e.pointerId === activePtr) handleJoy(e); };
-    window.onpointerup = e => { if(e.pointerId === activePtr) { activePtr = null; joyK.style.transform = ''; drive.throttle = 0; drive.steer = 0; } };
+    window.addEventListener('pointermove', e => { if(e.pointerId === activePtr) handleJoy(e); });
+    window.addEventListener('pointerup', e => { if(e.pointerId === activePtr) { activePtr = null; joyK.style.transform = ''; drive.throttle = 0; drive.steer = 0; } });
+
     function handleJoy(e) {
         const r = joyW.getBoundingClientRect();
-        let dx = e.clientX - (r.left + r.width/2), dy = e.clientY - (r.top + r.height/2);
-        const d = Math.min(Math.sqrt(dx*dx + dy*dy), 45);
-        if (d > 0) {
-            joyK.style.transform = `translate(${(dx/45)*d}px, ${(dy/45)*d}px)`;
-            drive.throttle = -dy/45; drive.steer = -dx/45;
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        let dx = e.clientX - cx, dy = e.clientY - cy;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d > MAX_JOY_DIST) {
+            const angle = Math.atan2(dy, dx);
+            dx = Math.cos(angle) * MAX_JOY_DIST;
+            dy = Math.sin(angle) * MAX_JOY_DIST;
         }
+        joyK.style.transform = `translate(${dx}px, ${dy}px)`;
+        drive.throttle = -dy / MAX_JOY_DIST;
+        drive.steer = -dx / MAX_JOY_DIST;
     }
+
     document.getElementById('brake-btn').onpointerdown = () => drive.brake = true;
     window.addEventListener('pointerup', e => { if(e.pointerId !== activePtr) drive.brake = false; });
 
+    const elSpeed = document.getElementById('speed-val'), elX = document.getElementById('pos-x'), elZ = document.getElementById('pos-z'), elStable = document.getElementById('recovery-status');
     const clock = new THREE.Clock(), prevPos = new THREE.Vector3();
-    let lastUpdatePos = new THREE.Vector3(0,0,0), recoveryTimer = 0;
+    let lastUpdatePos = new THREE.Vector3(0,0,0), recoveryTimer = 0, uiTimer = 0;
+    const _wp = new CANNON.Vec3(); 
 
     function animate() {
         requestAnimationFrame(animate);
-        const dt = clock.getDelta(), speed = vehicle.currentVehicleSpeedKmHour, absS = Math.abs(speed);
+        const dt = Math.min(clock.getDelta(), 0.1), speed = vehicle.currentVehicleSpeedKmHour, absS = Math.abs(speed);
         const now = Date.now();
 
-        const subSteps = 30, tStep = 1 / (60 * subSteps); 
+        const subSteps = 15, tStep = 1 / (60 * subSteps); 
         for (let i = 0; i < subSteps; i++) {
             world.step(tStep);
-            // Restore Collision Matrix logic
             collisionPoints.forEach(lp => {
-                const wp = new CANNON.Vec3();
-                chassisBody.quaternion.vmult(lp, wp);
-                wp.vadd(chassisBody.position, wp);
-                const floorY = getHeight(wp.x, wp.z);
-                if (wp.y < floorY) {
-                    const penetration = floorY - wp.y;
-                    chassisBody.applyImpulse(new CANNON.Vec3(0, (penetration * MASS * (recoveryTimer > 0.5 ? 800 : 240)) * tStep, 0), wp.vsub(chassisBody.position));
+                chassisBody.quaternion.vmult(lp, _wp);
+                _wp.vadd(chassisBody.position, _wp);
+                const floorY = getHeight(_wp.x, _wp.z);
+                if (_wp.y < floorY) {
+                    const penetration = floorY - _wp.y;
+                    chassisBody.applyImpulse(new CANNON.Vec3(0, (penetration * MASS * (recoveryTimer > 0.5 ? 800 : 240)) * tStep, 0), _wp.vsub(chassisBody.position));
                 }
             });
         }
 
-        // Restore Stability / Recovery Logic
         const carUp = new CANNON.Vec3(0, 1, 0);
         chassisBody.quaternion.vmult(carUp, carUp);
         const uprightFactor = carUp.dot(new CANNON.Vec3(0, 1, 0));
@@ -289,9 +333,9 @@
                 chassisBody.angularVelocity.x += rollAxis.x * 3.5;
                 chassisBody.angularVelocity.z += rollAxis.z * 3.5;
                 if (recoveryTimer < 1.1) chassisBody.velocity.y += 10;
-                document.getElementById('recovery-status').innerText = "RECOVERING...";
+                elStable.innerText = "RECOVERING...";
             }
-        } else { recoveryTimer = 0; document.getElementById('recovery-status').innerText = "STABLE"; }
+        } else { recoveryTimer = 0; elStable.innerText = "STABLE"; }
 
         const eForce = (absS < MAX_SPEED_KMH && !drive.brake) ? drive.throttle * 4.1e15 : 0;
         const bForce = drive.brake ? 1e20 : 0;
@@ -299,13 +343,21 @@
         vehicle.setSteeringValue(drive.steer * 0.08, 2); vehicle.setSteeringValue(drive.steer * 0.08, 3);
 
         localCarMesh.position.copy(chassisBody.position); localCarMesh.quaternion.copy(chassisBody.quaternion);
-        document.getElementById('speed-val').innerText = Math.round(absS).toLocaleString();
+        localCarMesh.updateMatrix();
+
+        uiTimer++;
+        if(uiTimer % 5 === 0) {
+            elSpeed.innerText = Math.round(absS).toLocaleString();
+            elX.innerText = Math.round(chassisBody.position.x);
+            elZ.innerText = Math.round(chassisBody.position.z);
+        }
         
         vehicle.wheelInfos.forEach((w, i) => {
             vehicle.updateWheelTransform(i);
             if (wheelMeshes[i]) {
                 wheelMeshes[i].position.copy(w.worldTransform.position);
                 wheelMeshes[i].quaternion.copy(w.worldTransform.quaternion);
+                wheelMeshes[i].updateMatrix();
                 if(!drive.brake) wheelMeshes[i].children[0].rotateX((speed * dt) / WHEEL_RADIUS * 0.1 * ((i >= 2) ? -1 : 1));
             }
         });
